@@ -5,11 +5,9 @@ import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, delet
 
 // --- Firebase Initialization ---
 // This configuration is now loaded from the environment variable you set in Netlify.
-// It is NOT the special __firebase_config variable anymore.
 const firebaseConfig = JSON.parse(process.env.REACT_APP_FIREBASE_CONFIG);
 
 // This is a static ID for your application's data structure in Firestore.
-// It replaces the special __app_id variable.
 const appId = 'loan-tracker-app-v1';
 
 // Initialize Firebase services once.
@@ -64,7 +62,7 @@ function LoginScreen({ userId, onSelectLoan }) {
                     const loansSnapshot = await getDocs(loansQuery);
                     const loansData = loansSnapshot.docs.map(doc => ({
                         id: doc.id,
-                        ...doc.data().settings
+                        ...(doc.data().settings || {})
                     }));
                     setUserLoans(loansData);
                 } else {
@@ -219,7 +217,7 @@ function LoginScreen({ userId, onSelectLoan }) {
                             {userLoans.map(loan => (
                                 <li key={loan.id} onClick={() => onSelectLoan(loan.id)} className="bg-gray-50 p-4 rounded-lg flex justify-between items-center cursor-pointer hover:bg-indigo-100 hover:shadow-md transition group">
                                     <div>
-                                        <p className="font-semibold text-gray-800 group-hover:text-indigo-800">{loan.appTitle}</p>
+                                        <p className="font-semibold text-gray-800 group-hover:text-indigo-800">{loan.appTitle || "Untitled Loan"}</p>
                                         <p className="text-xs text-gray-500 font-mono">ID: {loan.id}</p>
                                     </div>
                                     <Icon path="m8.25 4.5 7.5 7.5-7.5 7.5" className="w-5 h-5 text-gray-400 group-hover:text-indigo-600 transition" />
@@ -572,8 +570,6 @@ function App() {
                 setUserId(user.uid);
                 setIsAuthReady(true);
             } else {
-                // For a standalone app, we always sign in anonymously if there's no user.
-                // The __initial_auth_token logic is removed.
                 try {
                     await signInAnonymously(auth);
                 } catch (error) {

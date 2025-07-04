@@ -36,6 +36,23 @@ const Modal = ({ children, onClose }) => (
     </div>
 );
 
+const AccordionSection = ({ title, iconPath, children, defaultOpen = false }) => {
+    const [isOpen, setIsOpen] = useState(defaultOpen);
+    return (
+        <div className="bg-white p-4 sm:p-6 rounded-xl shadow-lg border border-gray-200">
+            <button onClick={() => setIsOpen(!isOpen)} className="w-full flex justify-between items-center text-left text-xl font-semibold text-gray-700">
+                <span className="flex items-center">
+                    <Icon path={iconPath} className="w-6 h-6 mr-3 text-indigo-500" />
+                    {title}
+                </span>
+                <Icon path={isOpen ? "M4.5 15.75l7.5-7.5 7.5 7.5" : "M19.5 8.25l-7.5 7.5-7.5-7.5"} className="w-5 h-5 text-gray-400 transition-transform" />
+            </button>
+            {isOpen && <div className="mt-4 pt-4 border-t border-gray-200">{children}</div>}
+        </div>
+    );
+};
+
+
 // --- Login & Dashboard Screen ---
 
 function LoginScreen({ userId, onSelectLoan }) {
@@ -239,7 +256,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   const [editingTransactionId, setEditingTransactionId] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState(null);
-  const [showLoanSetup, setShowLoanSetup] = useState(true);
   
   const getTodayDate = () => {
     const today = new Date();
@@ -263,11 +279,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         setInitialLoanDate(data.initialLoanDate ? data.initialLoanDate.toDate().toISOString().split('T')[0] : getTodayDate());
         setInterestRate(data.interestRate || '');
         setAppTitle(data.appTitle || 'Family Loan Tracker');
-        if (data.initialLoanAmount && data.initialLoanDate) {
-          setShowLoanSetup(false);
-        }
-      } else {
-        setShowLoanSetup(true);
       }
     }, (err) => {
         console.error("Error fetching settings:", err);
@@ -296,7 +307,8 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     };
   }, [userId, loanId]);
 
-  const handleSaveSettings = async () => {
+  const handleSaveSettings = async (e) => {
+    e.preventDefault();
     if (!userId || !loanId) return;
     if (isNaN(parseFloat(initialLoanAmount)) || isNaN(parseFloat(interestRate)) || !initialLoanDate) {
       setError("Please enter valid numbers and a date.");
@@ -316,7 +328,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
           lastUpdated: Timestamp.now(),
         }
       }, { merge: true });
-      setShowLoanSetup(false);
     } catch (err) {
       setError("Failed to save settings.");
     } finally {
@@ -447,40 +458,88 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
 
   const isLoanPaidOff = currentRunningBalance <= 0 && parseFloat(initialLoanAmount) > 0;
 
+  if (loading) {
+      return (
+          <div className="flex items-center justify-center min-h-screen bg-gray-100">
+              <Spinner />
+          </div>
+      )
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 font-inter text-gray-800 p-4 sm:p-6 lg:p-8">
+    <div className="min-h-screen bg-gray-100 font-inter text-gray-800 p-4 sm:p-6 lg:p-8">
         <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap'); body { font-family: 'Inter', sans-serif; }`}</style>
         
-        <div className="max-w-4xl mx-auto">
-            <button onClick={onBack} className="mb-6 flex items-center text-indigo-600 hover:text-indigo-800 font-semibold transition">
-                <Icon path="M15.75 19.5 8.25 12l7.5-7.5" className="w-5 h-5 mr-2" />
-                Back to My Loans
-            </button>
-
-            <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-xl border border-blue-200">
-                <div className="text-center mb-6">
-                    <h1 className="text-3xl sm:text-4xl font-bold text-indigo-700">{appTitle}</h1>
-                    <p className="text-xs text-gray-500 mt-2 bg-gray-100 p-2 rounded-md inline-block">Loan ID: <span className="font-mono select-all">{loanId}</span> (Share this to invite others)</p>
+        <div className="max-w-4xl mx-auto space-y-8">
+            <div>
+                <button onClick={onBack} className="mb-4 flex items-center text-indigo-600 hover:text-indigo-800 font-semibold transition">
+                    <Icon path="M15.75 19.5 8.25 12l7.5-7.5" className="w-5 h-5 mr-2" />
+                    Back to My Loans
+                </button>
+                <div className="text-center">
+                    <h1 className="text-3xl sm:text-4xl font-bold text-gray-800">{appTitle}</h1>
+                    <p className="text-xs text-gray-500 mt-2 bg-gray-200 p-2 rounded-md inline-block">Loan ID: <span className="font-mono select-all">{loanId}</span></p>
                 </div>
+            </div>
 
-                {error && <p className="text-red-500 bg-red-100 p-3 rounded-lg mb-4 text-center">{error}</p>}
-                
-                <div className="bg-indigo-100 border border-indigo-300 text-indigo-900 p-4 sm:p-6 rounded-xl shadow-md mb-8 text-center">
-                    <h2 className="text-xl sm:text-2xl font-semibold mb-2">Current Loan Balance</h2>
-                    {isLoanPaidOff ? (
-                        <p className="text-4xl sm:text-5xl font-bold text-green-700">$0.00 - Paid Off! 🎉</p>
-                    ) : (
-                        <p className="text-4xl sm:text-5xl font-bold text-indigo-700">${currentRunningBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                    )}
-                    {parseFloat(initialLoanAmount) > 0 && (
-                        <p className="text-lg font-semibold text-indigo-600 mt-2">{percentagePaidOff.toFixed(2)}% Paid Off</p>
-                    )}
-                </div>
+            {error && <p className="text-red-500 bg-red-100 p-3 rounded-lg text-center">{error}</p>}
+            
+            <div className="bg-indigo-600 text-white p-6 rounded-2xl shadow-2xl text-center">
+                <h2 className="text-lg font-semibold mb-2 opacity-80">Current Loan Balance</h2>
+                {isLoanPaidOff ? (
+                    <p className="text-4xl sm:text-5xl font-bold text-green-300">Paid Off! 🎉</p>
+                ) : (
+                    <p className="text-4xl sm:text-5xl font-bold">
+                        ${currentRunningBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                )}
+                {parseFloat(initialLoanAmount) > 0 && !isLoanPaidOff && (
+                    <div className="w-full bg-indigo-400 rounded-full h-2.5 mt-4">
+                        <div className="bg-green-400 h-2.5 rounded-full" style={{ width: `${percentagePaidOff}%` }}></div>
+                    </div>
+                )}
+            </div>
 
-                <div className="bg-white p-4 sm:p-6 rounded-xl shadow-lg border border-gray-200 overflow-x-auto">
-                    <h2 className="text-xl sm:text-2xl font-semibold text-gray-700 mb-4">Transaction History</h2>
-                    {displayTransactions.length === 0 && !loading ? (
-                        <p className="text-center text-gray-500">No transactions yet.</p>
+            <AccordionSection title="Add Transaction" iconPath="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" defaultOpen={true}>
+                 <form onSubmit={handleAddOrUpdateTransaction} className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label htmlFor="transactionDate" className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                            <input type="date" id="transactionDate" value={newTransactionDate} onChange={(e) => setNewTransactionDate(e.target.value)} required className="w-full p-2 border border-gray-300 rounded-md"/>
+                        </div>
+                        <div>
+                            <label htmlFor="transactionType" className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                            <select id="transactionType" value={newTransactionType} onChange={(e) => setNewTransactionType(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md">
+                                <option value="payment">Payment</option>
+                                <option value="loanIncrease">Loan Increase</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label htmlFor="transactionAmount" className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                        <input type="number" id="transactionAmount" value={newTransactionAmount} onChange={(e) => setNewTransactionAmount(e.target.value)} placeholder="0.00" required step="0.01" className="w-full p-2 border border-gray-300 rounded-md"/>
+                    </div>
+                    <div>
+                        <label htmlFor="transactionDescription" className="block text-sm font-medium text-gray-700 mb-1">Description (Optional)</label>
+                        <input type="text" id="transactionDescription" value={newTransactionDescription} onChange={(e) => setNewTransactionDescription(e.target.value)} placeholder="e.g., Monthly payment" className="w-full p-2 border border-gray-300 rounded-md"/>
+                    </div>
+                    <div className="flex gap-4">
+                        <button type="submit" disabled={loading} className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md disabled:bg-indigo-300">
+                            {editingTransactionId ? 'Update Transaction' : 'Add Transaction'}
+                        </button>
+                        {editingTransactionId && <button type="button" onClick={handleCancelEdit} className="flex-1 bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600">Cancel</button>}
+                    </div>
+                </form>
+            </AccordionSection>
+
+            <div className="bg-white p-4 sm:p-6 rounded-xl shadow-lg border border-gray-200">
+                <h2 className="text-xl font-semibold text-gray-700 mb-4 flex items-center">
+                    <Icon path="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.125 1.125 0 010 2.25H5.625a1.125 1.125 0 010-2.25z" className="w-6 h-6 mr-3 text-indigo-500" />
+                    Transaction History
+                </h2>
+                <div className="overflow-x-auto">
+                    {displayTransactions.length <= 1 ? (
+                        <p className="text-center text-gray-500 py-4">No transactions recorded yet.</p>
                     ) : (
                         <table className="min-w-full divide-y divide-gray-200">
                             <thead className="bg-gray-50">
@@ -497,7 +556,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                                 <tr key={t.id} className={t.isInitial ? 'bg-blue-50 font-semibold' : 'hover:bg-gray-50'}>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.date.toLocaleDateString()}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.description}</td>
-                                    <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${t.type === 'payment' ? 'text-green-600' : t.type === 'initial' ? 'text-gray-800' : 'text-red-600'}`}>
+                                    <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-medium ${t.type === 'payment' ? 'text-green-600' : t.type === 'initial' ? 'text-gray-800' : 'text-red-600'}`}>
                                         {t.type !== 'initial' && (t.type === 'payment' ? '-' : '+')}
                                         ${t.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </td>
@@ -516,43 +575,44 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                         </table>
                     )}
                 </div>
-
-                <div className={`bg-green-50 p-4 sm:p-6 rounded-xl shadow-inner mt-8 border border-green-200 ${isLoanPaidOff ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                    <h2 className="text-xl sm:text-2xl font-semibold text-green-700 mb-4">{editingTransactionId ? 'Edit Transaction' : 'Add New Transaction'}</h2>
-                    {!isLoanPaidOff && (
-                        <form onSubmit={handleAddOrUpdateTransaction} className="space-y-4">
-                            {/* Form fields here */}
-                            <div className="flex gap-4">
-                                <button type="submit" disabled={loading} className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 shadow-md">
-                                    {editingTransactionId ? 'Update Transaction' : 'Add Transaction'}
-                                </button>
-                                {editingTransactionId && <button type="button" onClick={handleCancelEdit} className="flex-1 bg-gray-400 text-white py-2 px-4 rounded-lg hover:bg-gray-500">Cancel</button>}
-                            </div>
-                        </form>
-                    )}
-                </div>
-
-                <div className="bg-indigo-50 p-4 sm:p-6 rounded-xl shadow-inner mt-8 border border-indigo-200">
-                    <button onClick={() => setShowLoanSetup(!showLoanSetup)} className="w-full text-left text-xl sm:text-2xl font-semibold text-indigo-600 mb-2">Loan Setup</button>
-                     {showLoanSetup && <form onSubmit={(e) => { e.preventDefault(); handleSaveSettings(); }} className="space-y-4">
-                        {/* Form fields here */}
-                        <div>
-                             <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md">Save Settings</button>
-                        </div>
-                     </form>}
-                </div>
-
-                {showDeleteConfirm && (
-                    <Modal onClose={() => setShowDeleteConfirm(false)}>
-                        <h3 className="text-lg font-semibold text-gray-900 mb-4">Confirm Deletion</h3>
-                        <p className="text-sm text-gray-700 mb-6">Are you sure? This cannot be undone.</p>
-                        <div className="flex justify-end space-x-3">
-                            <button onClick={() => setShowDeleteConfirm(false)} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Cancel</button>
-                            <button onClick={handleDeleteTransaction} disabled={loading} className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700">{loading ? 'Deleting...' : 'Delete'}</button>
-                        </div>
-                    </Modal>
-                )}
             </div>
+
+            <AccordionSection title="Loan Settings" iconPath="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.055l.732-.41c.464-.26.996-.059 1.256.397l.547.947c.26.456.058 1.002-.398 1.256l-.732.41c-.35.197-.557.576-.557.98l0 .001c0 .403.207.782.557.98l.732.41c.456.254.658.8.398 1.256l-.547.947c-.26.456-.792.657-1.256.397l-.732-.41c-.35-.197-.807-.22-1.205-.055a1.73 1.73 0 00-.78.93l-.149.894c-.09.542-.56.94-1.11.94h-1.093c-.55 0-1.02-.398-1.11-.94l-.149-.894a1.73 1.73 0 00-.78-.93c-.398-.164-.855-.142-1.205.055l-.732.41c-.464.26-.996.059-1.256-.397l-.547-.947c-.26-.456-.058-1.002.398-1.256l.732-.41c.35.197.557.576.557.98l0 .001c0 .403-.207.782-.557.98l-.732-.41c-.456.254-.658.8-.398-1.256l.547-.947c.26-.456.792-.657-1.256.397l.732-.41c.35-.197.807-.22 1.205-.055.396-.166.71-.506.78-.93l.149-.894z M12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z">
+                 <form onSubmit={handleSaveSettings} className="space-y-4">
+                    <div>
+                        <label htmlFor="appTitle" className="block text-sm font-medium text-gray-700 mb-1">Loan Name</label>
+                        <input type="text" id="appTitle" value={appTitle} onChange={(e) => setAppTitle(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md"/>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label htmlFor="initialLoanAmount" className="block text-sm font-medium text-gray-700 mb-1">Initial Amount ($)</label>
+                            <input type="number" id="initialLoanAmount" value={initialLoanAmount} onChange={(e) => setInitialLoanAmount(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md"/>
+                        </div>
+                        <div>
+                            <label htmlFor="interestRate" className="block text-sm font-medium text-gray-700 mb-1">Annual Interest Rate (%)</label>
+                            <input type="number" id="interestRate" value={interestRate} onChange={(e) => setInterestRate(e.target.value)} placeholder="e.g., 5 for 5%" className="w-full p-2 border border-gray-300 rounded-md"/>
+                        </div>
+                    </div>
+                     <div>
+                        <label htmlFor="initialLoanDate" className="block text-sm font-medium text-gray-700 mb-1">Initial Loan Date</label>
+                        <input type="date" id="initialLoanDate" value={initialLoanDate} onChange={(e) => setInitialLoanDate(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md"/>
+                    </div>
+                    <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md disabled:bg-indigo-300">
+                        Save Settings
+                    </button>
+                </form>
+            </AccordionSection>
+
+            {showDeleteConfirm && (
+                <Modal onClose={() => setShowDeleteConfirm(false)}>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Confirm Deletion</h3>
+                    <p className="text-sm text-gray-700 mb-6">Are you sure? This cannot be undone.</p>
+                    <div className="flex justify-end space-x-3">
+                        <button onClick={() => setShowDeleteConfirm(false)} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Cancel</button>
+                        <button onClick={handleDeleteTransaction} disabled={loading} className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700">{loading ? 'Deleting...' : 'Delete'}</button>
+                    </div>
+                </Modal>
+            )}
         </div>
     </div>
   );

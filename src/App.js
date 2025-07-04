@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, arrayRemove, Timestamp, orderBy } from 'firebase/firestore';
+import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, Timestamp, orderBy } from 'firebase/firestore';
 
 // --- Firebase Initialization ---
 // This configuration is now loaded from the environment variable you set in Netlify.
@@ -44,20 +44,17 @@ function LoginScreen({ userId, onSelectLoan }) {
     const [newLoanName, setNewLoanName] = useState('');
     const [joinLoanId, setJoinLoanId] = useState('');
     const [error, setError] = useState('');
-    const [message, setMessage] = useState('');
     const [isCreating, setIsCreating] = useState(false);
     const [isJoining, setIsJoining] = useState(false);
 
     useEffect(() => {
         if (!userId) return;
         setLoading(true);
-        // Path for user-specific data
         const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
         const unsubscribe = onSnapshot(userDocRef, async (userDoc) => {
             if (userDoc.exists()) {
                 const loanIds = userDoc.data().loans || [];
                 if (loanIds.length > 0) {
-                    // Path for public/shared data
                     const loansQuery = query(collection(db, `artifacts/${appId}/public/data/loans`), where('__name__', 'in', loanIds));
                     const loansSnapshot = await getDocs(loansQuery);
                     const loansData = loansSnapshot.docs.map(doc => ({
@@ -87,7 +84,6 @@ function LoginScreen({ userId, onSelectLoan }) {
         }
         setIsCreating(true);
         setError('');
-        setMessage('');
 
         const newLoanRef = doc(collection(db, `artifacts/${appId}/public/data/loans`));
         const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
@@ -104,7 +100,6 @@ function LoginScreen({ userId, onSelectLoan }) {
 
         try {
             await batch.commit();
-            setMessage(`Loan "${newLoanName}" created successfully!`);
             setNewLoanName('');
             onSelectLoan(newLoanRef.id);
         } catch (err) {
@@ -123,7 +118,6 @@ function LoginScreen({ userId, onSelectLoan }) {
         }
         setIsJoining(true);
         setError('');
-        setMessage('');
 
         const trimmedLoanId = joinLoanId.trim();
         const loanDocRef = doc(db, `artifacts/${appId}/public/data/loans/${trimmedLoanId}`);
@@ -142,8 +136,6 @@ function LoginScreen({ userId, onSelectLoan }) {
             batch.update(loanDocRef, { members: arrayUnion(userId) });
             batch.set(userDocRef, { loans: arrayUnion(trimmedLoanId) }, { merge: true });
             await batch.commit();
-
-            setMessage("Successfully joined the loan!");
             setJoinLoanId('');
         } catch (err) {
             console.error("Error joining loan:", err);
@@ -159,11 +151,10 @@ function LoginScreen({ userId, onSelectLoan }) {
                 <div className="text-center mb-10">
                     <h1 className="text-4xl sm:text-5xl font-bold text-gray-800">Loan Dashboard</h1>
                     <p className="text-gray-600 mt-2">Welcome! Manage your shared loans here.</p>
-                    <p className="text-xs text-gray-500 mt-4 bg-gray-100 p-2 rounded-md inline-block">Your User ID: <span className="font-mono select-all">{userId}</span></p>
+                    {userId && <p className="text-xs text-gray-500 mt-4 bg-gray-100 p-2 rounded-md inline-block">Your User ID: <span className="font-mono select-all">{userId}</span></p>}
                 </div>
                 
                 {error && <p className="text-red-500 bg-red-100 p-3 rounded-lg mb-4 text-center">{error}</p>}
-                {message && <p className="text-green-500 bg-green-100 p-3 rounded-lg mb-4 text-center">{message}</p>}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
@@ -244,7 +235,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   const [newTransactionAmount, setNewTransactionAmount] = useState('');
   const [newTransactionDescription, setNewTransactionDescription] = useState('');
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
   const [editingTransactionId, setEditingTransactionId] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState(null);
@@ -278,7 +269,10 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
       } else {
         setShowLoanSetup(true);
       }
-    }, (error) => console.error("Error fetching settings:", error));
+    }, (err) => {
+        console.error("Error fetching settings:", err);
+        setError("Could not fetch loan settings.");
+    });
 
     const transactionsColRef = collection(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`);
     const q = query(transactionsColRef, orderBy('date', 'asc'));
@@ -290,7 +284,11 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
       }));
       setTransactions(fetchedTransactions);
       setLoading(false);
-    }, (error) => console.error("Error fetching transactions:", error));
+    }, (err) => {
+        console.error("Error fetching transactions:", err);
+        setError("Could not fetch loan transactions.");
+        setLoading(false);
+    });
 
     return () => {
       unsubscribeSettings();
@@ -301,11 +299,12 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   const handleSaveSettings = async () => {
     if (!userId || !loanId) return;
     if (isNaN(parseFloat(initialLoanAmount)) || isNaN(parseFloat(interestRate)) || !initialLoanDate) {
-      setMessage("Please enter valid numbers and a date.");
+      setError("Please enter valid numbers and a date.");
       return;
     }
 
     setLoading(true);
+    setError('');
     const settingsDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
     try {
       await setDoc(settingsDocRef, {
@@ -317,10 +316,9 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
           lastUpdated: Timestamp.now(),
         }
       }, { merge: true });
-      setMessage("Settings saved successfully!");
       setShowLoanSetup(false);
-    } catch (error) {
-      setMessage("Failed to save settings.");
+    } catch (err) {
+      setError("Failed to save settings.");
     } finally {
       setLoading(false);
     }
@@ -330,11 +328,12 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     e.preventDefault();
     if (!userId || !loanId) return;
     if (!newTransactionDate || isNaN(parseFloat(newTransactionAmount)) || parseFloat(newTransactionAmount) <= 0) {
-        setMessage("Please enter a valid date and amount.");
+        setError("Please enter a valid date and amount.");
         return;
     }
 
     setLoading(true);
+    setError('');
     const transactionData = {
         date: Timestamp.fromDate(new Date(newTransactionDate)),
         type: newTransactionType,
@@ -348,17 +347,15 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     try {
         if (editingTransactionId) {
             await setDoc(doc(transactionsColRef, editingTransactionId), transactionData, { merge: true });
-            setMessage("Transaction updated!");
             setEditingTransactionId(null);
         } else {
             await addDoc(transactionsColRef, transactionData);
-            setMessage("Transaction added!");
         }
         setNewTransactionAmount('');
         setNewTransactionDescription('');
         setNewTransactionDate(getTodayDate());
-    } catch (error) {
-        setMessage("Failed to save transaction.");
+    } catch (err) {
+        setError("Failed to save transaction.");
     } finally {
         setLoading(false);
     }
@@ -367,12 +364,12 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   const handleDeleteTransaction = async () => {
     if (!userId || !loanId || !transactionToDelete) return;
     setLoading(true);
+    setError('');
     const transactionDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`, transactionToDelete);
     try {
         await deleteDoc(transactionDocRef);
-        setMessage("Transaction deleted.");
-    } catch (error) {
-        setMessage("Failed to delete transaction.");
+    } catch (err) {
+        setError("Failed to delete transaction.");
     } finally {
         setLoading(false);
         setShowDeleteConfirm(false);
@@ -465,6 +462,8 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                     <h1 className="text-3xl sm:text-4xl font-bold text-indigo-700">{appTitle}</h1>
                     <p className="text-xs text-gray-500 mt-2 bg-gray-100 p-2 rounded-md inline-block">Loan ID: <span className="font-mono select-all">{loanId}</span> (Share this to invite others)</p>
                 </div>
+
+                {error && <p className="text-red-500 bg-red-100 p-3 rounded-lg mb-4 text-center">{error}</p>}
                 
                 <div className="bg-indigo-100 border border-indigo-300 text-indigo-900 p-4 sm:p-6 rounded-xl shadow-md mb-8 text-center">
                     <h2 className="text-xl sm:text-2xl font-semibold mb-2">Current Loan Balance</h2>

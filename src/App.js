@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, Timestamp, orderBy } from 'firebase/firestore';
 
 // --- Firebase Initialization ---
@@ -50,18 +50,20 @@ const AccordionSection = ({ title, iconPath, children, defaultOpen = false }) =>
 
 // --- Authentication Screen ---
 function AuthScreen() {
-    const [isLogin, setIsLogin] = useState(true);
+    const [view, setView] = useState('login'); // 'login', 'signup', 'forgotPassword'
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);
 
-    const handleSubmit = async (e) => {
+    const handleAuthSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
         setError('');
+        setMessage('');
         try {
-            if (isLogin) {
+            if (view === 'login') {
                 await signInWithEmailAndPassword(auth, email, password);
             } else {
                 await createUserWithEmailAndPassword(auth, email, password);
@@ -73,6 +75,68 @@ function AuthScreen() {
         }
     };
 
+    const handlePasswordReset = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+        setMessage('');
+        try {
+            await sendPasswordResetEmail(auth, email);
+            setMessage('Password reset email sent! Please check your inbox.');
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const renderForm = () => {
+        if (view === 'forgotPassword') {
+            return (
+                <form onSubmit={handlePasswordReset} className="space-y-6">
+                    <h2 className="text-2xl font-semibold text-center text-gray-700">Reset Password</h2>
+                    <p className="text-center text-sm text-gray-600">Enter your email address and we will send you a link to reset your password.</p>
+                    <input
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="Email Address"
+                        required
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
+                    />
+                    <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition shadow-md disabled:bg-indigo-300 flex items-center justify-center">
+                        {loading ? <Spinner /> : 'Send Reset Email'}
+                    </button>
+                </form>
+            );
+        }
+
+        return (
+            <form onSubmit={handleAuthSubmit} className="space-y-6">
+                <h2 className="text-2xl font-semibold text-center text-gray-700">{view === 'login' ? 'Log In' : 'Sign Up'}</h2>
+                <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="Email Address"
+                    required
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
+                />
+                <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Password"
+                    required
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
+                />
+                <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition shadow-md disabled:bg-indigo-300 flex items-center justify-center">
+                    {loading ? <Spinner /> : (view === 'login' ? 'Log In' : 'Create Account')}
+                </button>
+            </form>
+        );
+    }
+
     return (
         <div className="min-h-screen bg-gray-100 flex flex-col justify-center items-center p-4">
             <div className="max-w-md w-full mx-auto">
@@ -81,35 +145,29 @@ function AuthScreen() {
                     <p className="text-gray-600 mt-2">Sign in or create an account to manage your loans.</p>
                 </div>
                 <div className="bg-white p-8 rounded-2xl shadow-lg">
-                    <form onSubmit={handleSubmit} className="space-y-6">
-                        <h2 className="text-2xl font-semibold text-center text-gray-700">{isLogin ? 'Log In' : 'Sign Up'}</h2>
-                        <input
-                            type="email"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            placeholder="Email Address"
-                            required
-                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
-                        />
-                        <input
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            placeholder="Password"
-                            required
-                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
-                        />
-                        <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition shadow-md disabled:bg-indigo-300 flex items-center justify-center">
-                            {loading ? <Spinner /> : (isLogin ? 'Log In' : 'Create Account')}
+                    {renderForm()}
+                    {error && <p className="text-red-500 text-sm text-center mt-4">{error}</p>}
+                    {message && <p className="text-green-500 text-sm text-center mt-4">{message}</p>}
+                    
+                    <div className="text-center text-sm text-gray-600 mt-6">
+                        {view === 'login' && (
+                            <button onClick={() => setView('forgotPassword')} className="font-semibold text-indigo-600 hover:underline">
+                                Forgot Password?
+                            </button>
+                        )}
+                        {view === 'forgotPassword' && (
+                            <button onClick={() => setView('login')} className="font-semibold text-indigo-600 hover:underline">
+                                Back to Log In
+                            </button>
+                        )}
+                    </div>
+
+                    <div className="text-center text-sm text-gray-600 mt-2">
+                        {view === 'login' ? "Don't have an account?" : "Already have an account?"}
+                        <button onClick={() => setView(view === 'login' ? 'signup' : 'login')} className="font-semibold text-indigo-600 hover:underline ml-1">
+                            {view === 'login' ? 'Sign Up' : 'Log In'}
                         </button>
-                        {error && <p className="text-red-500 text-sm text-center">{error}</p>}
-                    </form>
-                    <p className="text-center text-sm text-gray-600 mt-6">
-                        {isLogin ? "Don't have an account?" : "Already have an account?"}
-                        <button onClick={() => setIsLogin(!isLogin)} className="font-semibold text-indigo-600 hover:underline ml-1">
-                            {isLogin ? 'Sign Up' : 'Log In'}
-                        </button>
-                    </p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -647,7 +705,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                 </div>
             </div>
 
-            <AccordionSection title="Loan Settings" iconPath="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.055l.732-.41c.464-.26.996-.059 1.256.397l.547.947c.26.456.058 1.002-.398 1.256l-.732.41c-.35.197-.557.576-.557.98l0 .001c0 .403.207.782.557.98l.732.41c.456.254.658.8-.398-1.256l-.547-.947c-.26.456-.792.657-1.256.397l-.732-.41c-.35-.197-.807-.22-1.205-.055a1.73 1.73 0 00-.78.93l-.149.894c-.09.542-.56.94-1.11.94h-1.093c-.55 0-1.02-.398-1.11-.94l-.149-.894a1.73 1.73 0 00-.78-.93c-.398-.164-.855-.142-1.205.055l-.732.41c-.464.26-.996.059-1.256-.397l-.547-.947c-.26-.456-.058-1.002.398-1.256l.732-.41c.35.197.557.576.557.98l0 .001c0 .403-.207.782-.557.98l-.732-.41c-.456.254-.658.8-.398-1.256l.547-.947c.26-.456.792.657-1.256.397l.732-.41c.35-.197.807-.22 1.205-.055.396-.166.71-.506.78-.93l.149-.894z M12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z">
+            <AccordionSection title="Loan Settings" iconPath="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.055l.732-.41c.464-.26.996-.059 1.256.397l.547.947c.26.456.058 1.002-.398 1.256l-.732.41c-.35.197-.557.576-.557.98l0 .001c0 .403.207.782.557.98l.732.41c.456.254.658.8-.398-1.256l-.547-.947c-.26.456-.792.657-1.256.397l-.732-.41c-.35-.197-.807-.22-1.205-.055a1.73 1.73 0 00-.78.93l-.149.894c-.09.542-.56.94-1.11.94h-1.093c-.55 0-1.02-.398-1.11-.94l-.149-.894a1.73 1.73 0 00-.78-.93c-.398-.164-.855-.142-1.205.055l-.732.41c-.464.26-.996.059-1.256-.397l-.547-.947c-.26-.456-.058-1.002.398-1.256l.732-.41c.35.197.557.576.557.98l0 .001c0 .403-.207.782.557.98l-.732-.41c-.456.254-.658.8-.398-1.256l.547-.947c.26.456.792.657-1.256.397l.732-.41c.35-.197.807-.22 1.205-.055.396-.166.71-.506.78-.93l.149-.894z M12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z">
                  <form onSubmit={handleSaveSettings} className="space-y-4">
                     <div>
                         <label htmlFor="appTitle" className="block text-sm font-medium text-gray-700 mb-1">Loan Name</label>

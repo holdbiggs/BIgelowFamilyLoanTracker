@@ -186,25 +186,27 @@ function DashboardScreen({ user, onSelectLoan }) {
     const [isCreating, setIsCreating] = useState(false);
     const [isJoining, setIsJoining] = useState(false);
 
+    // Function to generate a user-friendly, 6-character ID
+    const generateFriendlyId = () => {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        let result = '';
+        for (let i = 0; i < 6; i++) {
+            result += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return `${result.slice(0,3)}-${result.slice(3,6)}`;
+    };
+
     useEffect(() => {
         if (!user) return;
         setLoading(true);
-        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
-        const unsubscribe = onSnapshot(userDocRef, async (userDoc) => {
-            if (userDoc.exists()) {
-                const loanIds = userDoc.data().loans || [];
-                if (loanIds.length > 0) {
-                    const loansQuery = query(collection(db, `artifacts/${appId}/public/data/loans`), where('__name__', 'in', loanIds));
-                    const loansSnapshot = await getDocs(loansQuery);
-                    const loansData = loansSnapshot.docs.map(doc => ({
-                        id: doc.id,
-                        ...(doc.data().settings || {})
-                    }));
-                    setUserLoans(loansData);
-                } else {
-                    setUserLoans([]);
-                }
-            }
+        // This query now finds all loans where the user's ID is in the 'members' array.
+        const loansQuery = query(collection(db, `artifacts/${appId}/public/data/loans`), where('members', 'array-contains', user.uid));
+        const unsubscribe = onSnapshot(loansQuery, (snapshot) => {
+            const loansData = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            setUserLoans(loansData);
             setLoading(false);
         }, (err) => {
             console.error("Error fetching user loans:", err);
@@ -226,15 +228,22 @@ function DashboardScreen({ user, onSelectLoan }) {
 
         const newLoanRef = doc(collection(db, `artifacts/${appId}/public/data/loans`));
         const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
+        const friendlyId = generateFriendlyId();
+        
         const batch = writeBatch(db);
 
+        // Set the new loan data, including the user-friendly ID
         batch.set(newLoanRef, {
             members: [user.uid],
+            friendlyId: friendlyId,
             settings: {
                 appTitle: newLoanName,
                 createdAt: Timestamp.now(),
             }
         });
+        
+        // This part is no longer strictly necessary as we query by 'members' array,
+        // but can be useful for other purposes.
         batch.set(userDocRef, { loans: arrayUnion(newLoanRef.id) }, { merge: true });
 
         try {
@@ -258,27 +267,35 @@ function DashboardScreen({ user, onSelectLoan }) {
         setIsJoining(true);
         setError('');
 
-        const trimmedLoanId = joinLoanId.trim();
-        const loanDocRef = doc(db, `artifacts/${appId}/public/data/loans/${trimmedLoanId}`);
-        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
-
+        const friendlyIdToJoin = joinLoanId.trim().toUpperCase();
+        
         try {
-            const loanDocQuery = query(collection(db, `artifacts/${appId}/public/data/loans`), where('__name__', '==', trimmedLoanId));
-            const loanDocSnapshot = await getDocs(loanDocQuery);
-            if (loanDocSnapshot.empty) {
-                setError("Loan ID not found. Please check the ID and try again.");
+            // New: Query for the loan using the user-friendly ID
+            const loansRef = collection(db, `artifacts/${appId}/public/data/loans`);
+            const q = query(loansRef, where("friendlyId", "==", friendlyIdToJoin));
+            const querySnapshot = await getDocs(q);
+
+            if (querySnapshot.empty) {
+                setError("Loan ID not found. Please check the code and try again.");
                 setIsJoining(false);
                 return;
             }
 
+            // Get the actual document ID and add the user to it
+            const loanDoc = querySnapshot.docs[0];
+            const loanDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanDoc.id}`);
+            const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
+            
             const batch = writeBatch(db);
             batch.update(loanDocRef, { members: arrayUnion(user.uid) });
-            batch.set(userDocRef, { loans: arrayUnion(trimmedLoanId) }, { merge: true });
+            batch.set(userDocRef, { loans: arrayUnion(loanDoc.id) }, { merge: true });
+            
             await batch.commit();
             setJoinLoanId('');
+
         } catch (err) {
             console.error("Error joining loan:", err);
-            setError("Failed to join loan. Please check the ID and try again.");
+            setError("Failed to join loan. Please check the code and try again.");
         } finally {
             setIsJoining(false);
         }
@@ -329,7 +346,7 @@ function DashboardScreen({ user, onSelectLoan }) {
                                 type="text"
                                 value={joinLoanId}
                                 onChange={(e) => setJoinLoanId(e.target.value)}
-                                placeholder="Enter Loan ID"
+                                placeholder="Enter 6-Digit Code"
                                 className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 transition"
                             />
                             <button type="submit" disabled={isJoining} className="w-full mt-4 bg-teal-600 text-white py-3 rounded-lg hover:bg-teal-700 transition shadow-md disabled:bg-teal-300 flex items-center justify-center">
@@ -351,8 +368,8 @@ function DashboardScreen({ user, onSelectLoan }) {
                             {userLoans.map(loan => (
                                 <li key={loan.id} onClick={() => onSelectLoan(loan.id)} className="bg-gray-50 p-4 rounded-lg flex justify-between items-center cursor-pointer hover:bg-indigo-100 hover:shadow-md transition group">
                                     <div>
-                                        <p className="font-semibold text-gray-800 group-hover:text-indigo-800">{loan.appTitle || "Untitled Loan"}</p>
-                                        <p className="text-xs text-gray-500 font-mono">ID: {loan.id}</p>
+                                        <p className="font-semibold text-gray-800 group-hover:text-indigo-800">{loan.settings.appTitle || "Untitled Loan"}</p>
+                                        <p className="text-xs text-gray-500 font-mono">CODE: {loan.friendlyId}</p>
                                     </div>
                                     <Icon path="m8.25 4.5 7.5 7.5-7.5 7.5" className="w-5 h-5 text-gray-400 group-hover:text-indigo-600 transition" />
                                 </li>
@@ -368,20 +385,20 @@ function DashboardScreen({ user, onSelectLoan }) {
 }
 
 // --- Loan Detail Screen ---
-// This component remains largely unchanged from the previous version.
 function LoanDetailScreen({ userId, loanId, onBack }) {
   const [transactions, setTransactions] = useState([]);
-  const [initialLoanAmount, setInitialLoanAmount] = useState('');
-  const [initialLoanDate, setInitialLoanDate] = useState('');
-  const [interestRate, setInterestRate] = useState('');
-  const [appTitle, setAppTitle] = useState('Loan Tracker');
+  const [loanData, setLoanData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  
+  // State for the "Add Transaction" form
   const [newTransactionDate, setNewTransactionDate] = useState('');
   const [newTransactionType, setNewTransactionType] = useState('payment');
   const [newTransactionAmount, setNewTransactionAmount] = useState('');
   const [newTransactionDescription, setNewTransactionDescription] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [editingTransactionId, setEditingTransactionId] = useState(null);
+  
+  // State for modals
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState(null);
   
@@ -392,7 +409,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
 
   useEffect(() => {
     setNewTransactionDate(getTodayDate());
-    setInitialLoanDate(getTodayDate());
   }, []);
 
   useEffect(() => {
@@ -401,12 +417,8 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     setLoading(true);
     const settingsDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
     const unsubscribeSettings = onSnapshot(settingsDocRef, (docSnap) => {
-      if (docSnap.exists() && docSnap.data().settings) {
-        const data = docSnap.data().settings;
-        setInitialLoanAmount(data.initialLoanAmount || '');
-        setInitialLoanDate(data.initialLoanDate ? data.initialLoanDate.toDate().toISOString().split('T')[0] : getTodayDate());
-        setInterestRate(data.interestRate || '');
-        setAppTitle(data.appTitle || 'Family Loan Tracker');
+      if (docSnap.exists()) {
+        setLoanData(docSnap.data());
       }
     }, (err) => {
         console.error("Error fetching settings:", err);
@@ -438,8 +450,16 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   const handleSaveSettings = async (e) => {
     e.preventDefault();
     if (!userId || !loanId) return;
-    if (isNaN(parseFloat(initialLoanAmount)) || isNaN(parseFloat(interestRate)) || !initialLoanDate) {
-      setError("Please enter valid numbers and a date.");
+    
+    const newSettings = {
+        appTitle: e.target.appTitle.value,
+        initialLoanAmount: parseFloat(e.target.initialLoanAmount.value),
+        interestRate: parseFloat(e.target.interestRate.value),
+        initialLoanDate: Timestamp.fromDate(new Date(e.target.initialLoanDate.value)),
+    }
+
+    if (isNaN(newSettings.initialLoanAmount) || isNaN(newSettings.interestRate) || !newSettings.initialLoanDate) {
+      setError("Please enter valid numbers and a date for all settings.");
       return;
     }
 
@@ -447,15 +467,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     setError('');
     const settingsDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
     try {
-      await setDoc(settingsDocRef, {
-        settings: {
-          initialLoanAmount: parseFloat(initialLoanAmount),
-          initialLoanDate: Timestamp.fromDate(new Date(initialLoanDate)),
-          interestRate: parseFloat(interestRate),
-          appTitle: appTitle,
-          lastUpdated: Timestamp.now(),
-        }
-      }, { merge: true });
+      await setDoc(settingsDocRef, { settings: newSettings }, { merge: true });
     } catch (err) {
       setError("Failed to save settings.");
     } finally {
@@ -516,21 +528,21 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     }
   };
 
-  const calculateDisplayTransactions = useCallback(() => {
-    if (!initialLoanAmount || !initialLoanDate) {
+  const { transactions: displayTransactions, currentRunningBalance } = useMemo(() => {
+    if (!loanData?.settings?.initialLoanAmount || !loanData?.settings?.initialLoanDate) {
       return { transactions: [], currentRunningBalance: 0 };
     }
 
-    let runningBalance = parseFloat(initialLoanAmount);
+    let runningBalance = parseFloat(loanData.settings.initialLoanAmount);
     const calculatedTransactions = [];
     
     const sortedTransactions = [...transactions].sort((a, b) => a.date.getTime() - b.date.getTime());
     
     calculatedTransactions.push({
         id: 'initial',
-        date: new Date(initialLoanDate),
+        date: loanData.settings.initialLoanDate.toDate(),
         description: 'Initial Loan Amount',
-        amount: parseFloat(initialLoanAmount),
+        amount: parseFloat(loanData.settings.initialLoanAmount),
         type: 'initial',
         runningBalance: runningBalance,
         isInitial: true,
@@ -550,18 +562,13 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         transactions: calculatedTransactions, 
         currentRunningBalance: runningBalance, 
     };
-  }, [transactions, initialLoanAmount, initialLoanDate]);
-
-  const { transactions: displayTransactions, currentRunningBalance } = useMemo(
-    () => calculateDisplayTransactions(),
-    [calculateDisplayTransactions]
-  );
+  }, [transactions, loanData]);
     
   const percentagePaidOff = useMemo(() => {
-    if (parseFloat(initialLoanAmount) <= 0) return 0;
-    const paidAmount = parseFloat(initialLoanAmount) - currentRunningBalance;
-    return Math.max(0, Math.min(100, (paidAmount / parseFloat(initialLoanAmount)) * 100));
-  }, [initialLoanAmount, currentRunningBalance]);
+    if (!loanData?.settings?.initialLoanAmount || parseFloat(loanData.settings.initialLoanAmount) <= 0) return 0;
+    const paidAmount = parseFloat(loanData.settings.initialLoanAmount) - currentRunningBalance;
+    return Math.max(0, Math.min(100, (paidAmount / parseFloat(loanData.settings.initialLoanAmount)) * 100));
+  }, [loanData, currentRunningBalance]);
 
   const handleEditTransaction = (transaction) => {
     setEditingTransactionId(transaction.id);
@@ -584,9 +591,9 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     setShowDeleteConfirm(true);
   };
 
-  const isLoanPaidOff = currentRunningBalance <= 0 && parseFloat(initialLoanAmount) > 0;
+  const isLoanPaidOff = currentRunningBalance <= 0 && loanData?.settings?.initialLoanAmount > 0;
 
-  if (loading) {
+  if (loading || !loanData) {
       return (
           <div className="flex items-center justify-center min-h-screen bg-gray-100">
               <Spinner />
@@ -605,8 +612,8 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                     Back to My Loans
                 </button>
                 <div className="text-center">
-                    <h1 className="text-3xl sm:text-4xl font-bold text-gray-800">{appTitle}</h1>
-                    <p className="text-xs text-gray-500 mt-2 bg-gray-200 p-2 rounded-md inline-block">Loan ID: <span className="font-mono select-all">{loanId}</span></p>
+                    <h1 className="text-3xl sm:text-4xl font-bold text-gray-800">{loanData.settings.appTitle}</h1>
+                    <p className="text-xs text-gray-500 mt-2 bg-gray-200 p-2 rounded-md inline-block">SHARE CODE: <span className="font-mono select-all">{loanData.friendlyId}</span></p>
                 </div>
             </div>
 
@@ -621,7 +628,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                         ${currentRunningBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                 )}
-                {parseFloat(initialLoanAmount) > 0 && !isLoanPaidOff && (
+                {parseFloat(loanData.settings.initialLoanAmount) > 0 && !isLoanPaidOff && (
                     <div className="w-full bg-indigo-400 rounded-full h-2.5 mt-4">
                         <div className="bg-green-400 h-2.5 rounded-full" style={{ width: `${percentagePaidOff}%` }}></div>
                     </div>
@@ -709,21 +716,21 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                  <form onSubmit={handleSaveSettings} className="space-y-4">
                     <div>
                         <label htmlFor="appTitle" className="block text-sm font-medium text-gray-700 mb-1">Loan Name</label>
-                        <input type="text" id="appTitle" value={appTitle} onChange={(e) => setAppTitle(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md"/>
+                        <input type="text" id="appTitle" defaultValue={loanData.settings.appTitle} className="w-full p-2 border border-gray-300 rounded-md"/>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label htmlFor="initialLoanAmount" className="block text-sm font-medium text-gray-700 mb-1">Initial Amount ($)</label>
-                            <input type="number" id="initialLoanAmount" value={initialLoanAmount} onChange={(e) => setInitialLoanAmount(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md"/>
+                            <input type="number" id="initialLoanAmount" defaultValue={loanData.settings.initialLoanAmount} className="w-full p-2 border border-gray-300 rounded-md"/>
                         </div>
                         <div>
                             <label htmlFor="interestRate" className="block text-sm font-medium text-gray-700 mb-1">Annual Interest Rate (%)</label>
-                            <input type="number" id="interestRate" value={interestRate} onChange={(e) => setInterestRate(e.target.value)} placeholder="e.g., 5 for 5%" className="w-full p-2 border border-gray-300 rounded-md"/>
+                            <input type="number" id="interestRate" defaultValue={loanData.settings.interestRate} placeholder="e.g., 5 for 5%" className="w-full p-2 border border-gray-300 rounded-md"/>
                         </div>
                     </div>
                      <div>
                         <label htmlFor="initialLoanDate" className="block text-sm font-medium text-gray-700 mb-1">Initial Loan Date</label>
-                        <input type="date" id="initialLoanDate" value={initialLoanDate} onChange={(e) => setInitialLoanDate(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md"/>
+                        <input type="date" id="initialLoanDate" defaultValue={loanData.settings.initialLoanDate.toDate().toISOString().split('T')[0]} className="w-full p-2 border border-gray-300 rounded-md"/>
                     </div>
                     <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md disabled:bg-indigo-300">
                         Save Settings

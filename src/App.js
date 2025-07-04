@@ -1,16 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, Timestamp, orderBy } from 'firebase/firestore';
 
 // --- Firebase Initialization ---
-// This configuration is now loaded from the environment variable you set in Netlify.
 const firebaseConfig = JSON.parse(process.env.REACT_APP_FIREBASE_CONFIG);
-
-// This is a static ID for your application's data structure in Firestore.
 const appId = 'loan-tracker-app-v1';
 
-// Initialize Firebase services once.
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
@@ -25,7 +21,7 @@ const Icon = ({ path, className = "w-6 h-6" }) => (
 );
 
 const Spinner = () => (
-    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
+    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
 );
 
 const Modal = ({ children, onClose }) => (
@@ -52,10 +48,78 @@ const AccordionSection = ({ title, iconPath, children, defaultOpen = false }) =>
     );
 };
 
+// --- Authentication Screen ---
+function AuthScreen() {
+    const [isLogin, setIsLogin] = useState(true);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
 
-// --- Login & Dashboard Screen ---
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+        try {
+            if (isLogin) {
+                await signInWithEmailAndPassword(auth, email, password);
+            } else {
+                await createUserWithEmailAndPassword(auth, email, password);
+            }
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
 
-function LoginScreen({ userId, onSelectLoan }) {
+    return (
+        <div className="min-h-screen bg-gray-100 flex flex-col justify-center items-center p-4">
+            <div className="max-w-md w-full mx-auto">
+                <div className="text-center mb-8">
+                    <h1 className="text-4xl font-bold text-gray-800">Welcome</h1>
+                    <p className="text-gray-600 mt-2">Sign in or create an account to manage your loans.</p>
+                </div>
+                <div className="bg-white p-8 rounded-2xl shadow-lg">
+                    <form onSubmit={handleSubmit} className="space-y-6">
+                        <h2 className="text-2xl font-semibold text-center text-gray-700">{isLogin ? 'Log In' : 'Sign Up'}</h2>
+                        <input
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            placeholder="Email Address"
+                            required
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
+                        />
+                        <input
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="Password"
+                            required
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
+                        />
+                        <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition shadow-md disabled:bg-indigo-300 flex items-center justify-center">
+                            {loading ? <Spinner /> : (isLogin ? 'Log In' : 'Create Account')}
+                        </button>
+                        {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+                    </form>
+                    <p className="text-center text-sm text-gray-600 mt-6">
+                        {isLogin ? "Don't have an account?" : "Already have an account?"}
+                        <button onClick={() => setIsLogin(!isLogin)} className="font-semibold text-indigo-600 hover:underline ml-1">
+                            {isLogin ? 'Sign Up' : 'Log In'}
+                        </button>
+                    </p>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+
+// --- Dashboard Screen ---
+
+function DashboardScreen({ user, onSelectLoan }) {
     const [userLoans, setUserLoans] = useState([]);
     const [loading, setLoading] = useState(true);
     const [newLoanName, setNewLoanName] = useState('');
@@ -65,9 +129,9 @@ function LoginScreen({ userId, onSelectLoan }) {
     const [isJoining, setIsJoining] = useState(false);
 
     useEffect(() => {
-        if (!userId) return;
+        if (!user) return;
         setLoading(true);
-        const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
+        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
         const unsubscribe = onSnapshot(userDocRef, async (userDoc) => {
             if (userDoc.exists()) {
                 const loanIds = userDoc.data().loans || [];
@@ -91,7 +155,7 @@ function LoginScreen({ userId, onSelectLoan }) {
         });
 
         return () => unsubscribe();
-    }, [userId]);
+    }, [user]);
 
     const handleCreateLoan = async (e) => {
         e.preventDefault();
@@ -103,11 +167,11 @@ function LoginScreen({ userId, onSelectLoan }) {
         setError('');
 
         const newLoanRef = doc(collection(db, `artifacts/${appId}/public/data/loans`));
-        const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
+        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
         const batch = writeBatch(db);
 
         batch.set(newLoanRef, {
-            members: [userId],
+            members: [user.uid],
             settings: {
                 appTitle: newLoanName,
                 createdAt: Timestamp.now(),
@@ -138,7 +202,7 @@ function LoginScreen({ userId, onSelectLoan }) {
 
         const trimmedLoanId = joinLoanId.trim();
         const loanDocRef = doc(db, `artifacts/${appId}/public/data/loans/${trimmedLoanId}`);
-        const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
+        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
 
         try {
             const loanDocQuery = query(collection(db, `artifacts/${appId}/public/data/loans`), where('__name__', '==', trimmedLoanId));
@@ -150,7 +214,7 @@ function LoginScreen({ userId, onSelectLoan }) {
             }
 
             const batch = writeBatch(db);
-            batch.update(loanDocRef, { members: arrayUnion(userId) });
+            batch.update(loanDocRef, { members: arrayUnion(user.uid) });
             batch.set(userDocRef, { loans: arrayUnion(trimmedLoanId) }, { merge: true });
             await batch.commit();
             setJoinLoanId('');
@@ -163,12 +227,16 @@ function LoginScreen({ userId, onSelectLoan }) {
     };
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-200 flex items-center justify-center p-4">
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-200 p-4">
             <div className="w-full max-w-2xl mx-auto">
-                <div className="text-center mb-10">
-                    <h1 className="text-4xl sm:text-5xl font-bold text-gray-800">Loan Dashboard</h1>
-                    <p className="text-gray-600 mt-2">Welcome! Manage your shared loans here.</p>
-                    {userId && <p className="text-xs text-gray-500 mt-4 bg-gray-100 p-2 rounded-md inline-block">Your User ID: <span className="font-mono select-all">{userId}</span></p>}
+                <div className="flex justify-between items-center mb-10">
+                    <div className="text-left">
+                        <h1 className="text-4xl sm:text-5xl font-bold text-gray-800">Dashboard</h1>
+                        <p className="text-gray-600 mt-1">Welcome, {user.email}</p>
+                    </div>
+                    <button onClick={() => signOut(auth)} className="bg-red-500 text-white py-2 px-4 rounded-lg hover:bg-red-600 transition shadow-md">
+                        Log Out
+                    </button>
                 </div>
                 
                 {error && <p className="text-red-500 bg-red-100 p-3 rounded-lg mb-4 text-center">{error}</p>}
@@ -215,7 +283,7 @@ function LoginScreen({ userId, onSelectLoan }) {
 
                 <div className="mt-10 bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
                      <h2 className="text-2xl font-semibold text-gray-700 mb-4 flex items-center">
-                        <Icon path="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.75A.75.75 0 0 1 3 4.5h.75m0 0h.75A.75.75 0 0 1 4.5 6v.75m0 0v.75a.75.75 0 0 1-.75.75h-.75m0 0H3.75m0 0a.75.75 0 0 1-.75-.75V6m0 0V5.25m0 0A.75.75 0 0 1 3.75 4.5h.75M15 4.5v.75A.75.75 0 0 1 14.25 6h-.75m0 0v-.75a.75.75 0 0 1 .75-.75h.75m0 0h.75a.75.75 0 0 1 .75.75v.75m0 0v.75a.75.75 0 0 1-.75.75h-.75m0 0h-.75m0 0a.75.75 0 0 1-.75-.75V6m0 0v-.75m1.5.75a.75.75 0 0 1 .75-.75h.75a.75.75 0 0 1 .75.75v.75m0 0v.75a.75.75 0 0 1-.75.75h-.75a.75.75 0 0 1-.75-.75V6m3 12.75v-6.161c0-.853-.48-1.635-1.28-2.033l-7.443-4.148a.75.75 0 0 0-.976.652v11.342a.75.75 0 0 0 .976.652l7.443-4.148c.8-.398 1.28-1.18 1.28-2.033Z" className="w-6 h-6 mr-2 text-amber-500" />
+                        <Icon path="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.125 1.125 0 010 2.25H5.625a1.125 1.125 0 010-2.25z" className="w-6 h-6 mr-2 text-amber-500" />
                         My Loans
                     </h2>
                     {loading ? (
@@ -233,7 +301,7 @@ function LoginScreen({ userId, onSelectLoan }) {
                             ))}
                         </ul>
                     ) : (
-                        <p className="text-center text-gray-500 py-4">You are not part of any loans yet. Create one or join one to get started!</p>
+                        <p className="text-center text-gray-500 py-4">You have not joined or created any loans yet.</p>
                     )}
                 </div>
             </div>
@@ -241,6 +309,8 @@ function LoginScreen({ userId, onSelectLoan }) {
     );
 }
 
+// --- Loan Detail Screen ---
+// This component remains largely unchanged from the previous version.
 function LoanDetailScreen({ userId, loanId, onBack }) {
   const [transactions, setTransactions] = useState([]);
   const [initialLoanAmount, setInitialLoanAmount] = useState('');
@@ -577,7 +647,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                 </div>
             </div>
 
-            <AccordionSection title="Loan Settings" iconPath="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.055l.732-.41c.464-.26.996-.059 1.256.397l.547.947c.26.456.058 1.002-.398 1.256l-.732.41c-.35.197-.557.576-.557.98l0 .001c0 .403.207.782.557.98l.732.41c.456.254.658.8.398 1.256l-.547.947c-.26.456-.792.657-1.256.397l-.732-.41c-.35-.197-.807-.22-1.205-.055a1.73 1.73 0 00-.78.93l-.149.894c-.09.542-.56.94-1.11.94h-1.093c-.55 0-1.02-.398-1.11-.94l-.149-.894a1.73 1.73 0 00-.78-.93c-.398-.164-.855-.142-1.205.055l-.732.41c-.464.26-.996.059-1.256-.397l-.547-.947c-.26-.456-.058-1.002.398-1.256l.732-.41c.35.197.557.576.557.98l0 .001c0 .403-.207.782-.557.98l-.732-.41c-.456.254-.658.8-.398-1.256l.547-.947c.26-.456.792-.657-1.256.397l.732-.41c.35-.197.807-.22 1.205-.055.396-.166.71-.506.78-.93l.149-.894z M12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z">
+            <AccordionSection title="Loan Settings" iconPath="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.055l.732-.41c.464-.26.996-.059 1.256.397l.547.947c.26.456.058 1.002-.398 1.256l-.732.41c-.35.197-.557.576-.557.98l0 .001c0 .403.207.782.557.98l.732.41c.456.254.658.8-.398-1.256l-.547-.947c-.26.456-.792.657-1.256.397l-.732-.41c-.35-.197-.807-.22-1.205-.055a1.73 1.73 0 00-.78.93l-.149.894c-.09.542-.56.94-1.11.94h-1.093c-.55 0-1.02-.398-1.11-.94l-.149-.894a1.73 1.73 0 00-.78-.93c-.398-.164-.855-.142-1.205.055l-.732.41c-.464.26-.996.059-1.256-.397l-.547-.947c-.26-.456-.058-1.002.398-1.256l.732-.41c.35.197.557.576.557.98l0 .001c0 .403-.207.782-.557.98l-.732-.41c-.456.254-.658.8-.398-1.256l.547-.947c.26-.456.792.657-1.256.397l.732-.41c.35-.197.807-.22 1.205-.055.396-.166.71-.506.78-.93l.149-.894z M12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z">
                  <form onSubmit={handleSaveSettings} className="space-y-4">
                     <div>
                         <label htmlFor="appTitle" className="block text-sm font-medium text-gray-700 mb-1">Loan Name</label>
@@ -618,24 +688,18 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   );
 }
 
+
+// --- Main App Component (Router) ---
+
 function App() {
-    const [userId, setUserId] = useState(null);
+    const [user, setUser] = useState(null);
     const [isAuthReady, setIsAuthReady] = useState(false);
     const [selectedLoanId, setSelectedLoanId] = useState(null);
 
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                setUserId(user.uid);
-                setIsAuthReady(true);
-            } else {
-                try {
-                    await signInAnonymously(auth);
-                } catch (error) {
-                    console.error("Anonymous sign-in failed:", error);
-                    setIsAuthReady(true); // Prevent infinite loading
-                }
-            }
+        const unsubscribe = onAuthStateChanged(auth, (user) => {
+            setUser(user);
+            setIsAuthReady(true);
         });
         return () => unsubscribe();
     }, []);
@@ -659,12 +723,16 @@ function App() {
         );
     }
     
+    if (!user) {
+        return <AuthScreen />;
+    }
+
     return (
         <>
             {selectedLoanId ? (
-                <LoanDetailScreen userId={userId} loanId={selectedLoanId} onBack={handleBackToDashboard} />
+                <LoanDetailScreen userId={user.uid} loanId={selectedLoanId} onBack={handleBackToDashboard} />
             ) : (
-                <LoginScreen userId={userId} onSelectLoan={handleSelectLoan} />
+                <DashboardScreen user={user} onSelectLoan={handleSelectLoan} />
             )}
         </>
     );

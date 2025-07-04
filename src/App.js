@@ -242,8 +242,6 @@ function DashboardScreen({ user, onSelectLoan }) {
             }
         });
         
-        // This part is no longer strictly necessary as we query by 'members' array,
-        // but can be useful for other purposes.
         batch.set(userDocRef, { loans: arrayUnion(newLoanRef.id) }, { merge: true });
 
         try {
@@ -270,7 +268,6 @@ function DashboardScreen({ user, onSelectLoan }) {
         const friendlyIdToJoin = joinLoanId.trim().toUpperCase();
         
         try {
-            // New: Query for the loan using the user-friendly ID
             const loansRef = collection(db, `artifacts/${appId}/public/data/loans`);
             const q = query(loansRef, where("friendlyId", "==", friendlyIdToJoin));
             const querySnapshot = await getDocs(q);
@@ -281,7 +278,6 @@ function DashboardScreen({ user, onSelectLoan }) {
                 return;
             }
 
-            // Get the actual document ID and add the user to it
             const loanDoc = querySnapshot.docs[0];
             const loanDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanDoc.id}`);
             const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
@@ -530,7 +526,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
 
   const { transactions: displayTransactions, currentRunningBalance } = useMemo(() => {
     if (!loanData?.settings?.initialLoanAmount || !loanData?.settings?.initialLoanDate) {
-      return { transactions: [], currentRunningBalance: 0 };
+      return { transactions: [], currentRunningBalance: loanData?.settings?.initialLoanAmount || 0 };
     }
 
     let runningBalance = parseFloat(loanData.settings.initialLoanAmount);
@@ -730,7 +726,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                     </div>
                      <div>
                         <label htmlFor="initialLoanDate" className="block text-sm font-medium text-gray-700 mb-1">Initial Loan Date</label>
-                        <input type="date" id="initialLoanDate" defaultValue={loanData.settings.initialLoanDate.toDate().toISOString().split('T')[0]} className="w-full p-2 border border-gray-300 rounded-md"/>
+                        <input type="date" id="initialLoanDate" defaultValue={loanData.settings.initialLoanDate?.toDate().toISOString().split('T')[0] || ''} className="w-full p-2 border border-gray-300 rounded-md"/>
                     </div>
                     <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md disabled:bg-indigo-300">
                         Save Settings
@@ -803,4 +799,4 @@ function App() {
     );
 }
 
-export default App;
+export default A

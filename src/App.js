@@ -1,25 +1,675 @@
-import logo from './logo.svg';
-import './App.css';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, arrayRemove, Timestamp } from 'firebase/firestore';
 
-function App() {
+// --- Firebase Initialization ---
+// These are global variables that would be provided by the hosting environment.
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-loan-app';
+const firebaseConfig = JSON.parse(process.env.REACT_APP_FIREBASE_CONFIG); // Replace with your actual config if testing locally
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Initialize Firebase services once.
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+// --- Helper Components ---
+
+const Icon = ({ path, className = "w-6 h-6" }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+        <path strokeLinecap="round" strokeLinejoin="round" d={path} />
+    </svg>
+);
+
+const Spinner = () => (
+    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
+);
+
+const Modal = ({ children, onClose }) => (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+        <div className="bg-white rounded-2xl shadow-2xl p-6 sm:p-8 max-w-sm w-full" onClick={e => e.stopPropagation()}>
+            {children}
+        </div>
+    </div>
+);
+
+// --- Login & Dashboard Screen ---
+
+function LoginScreen({ userId, onSelectLoan }) {
+    const [userLoans, setUserLoans] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [newLoanName, setNewLoanName] = useState('');
+    const [joinLoanId, setJoinLoanId] = useState('');
+    const [error, setError] = useState('');
+    const [message, setMessage] = useState('');
+    const [isCreating, setIsCreating] = useState(false);
+    const [isJoining, setIsJoining] = useState(false);
+
+    useEffect(() => {
+        if (!userId) return;
+        setLoading(true);
+        // Corrected path for user-specific data
+        const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
+        const unsubscribe = onSnapshot(userDocRef, async (userDoc) => {
+            if (userDoc.exists()) {
+                const loanIds = userDoc.data().loans || [];
+                if (loanIds.length > 0) {
+                    // Corrected path for public/shared data
+                    const loansQuery = query(collection(db, `artifacts/${appId}/public/data/loans`), where('__name__', 'in', loanIds));
+                    const loansSnapshot = await getDocs(loansQuery);
+                    const loansData = loansSnapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data().settings
+                    }));
+                    setUserLoans(loansData);
+                } else {
+                    setUserLoans([]);
+                }
+            }
+            setLoading(false);
+        }, (err) => {
+            console.error("Error fetching user loans:", err);
+            setError("Could not fetch your loans.");
+            setLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, [userId]);
+
+    const handleCreateLoan = async (e) => {
+        e.preventDefault();
+        if (!newLoanName.trim()) {
+            setError("Please enter a name for the loan.");
+            return;
+        }
+        setIsCreating(true);
+        setError('');
+        setMessage('');
+
+        // Corrected paths for creating new loan and updating user profile
+        const newLoanRef = doc(collection(db, `artifacts/${appId}/public/data/loans`));
+        const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
+        const batch = writeBatch(db);
+
+        // 1. Create the loan document in the public space
+        batch.set(newLoanRef, {
+            members: [userId],
+            settings: {
+                appTitle: newLoanName,
+                createdAt: Timestamp.now(),
+            }
+        });
+
+        // 2. Add the loan ID to the user's private document
+        batch.set(userDocRef, { loans: arrayUnion(newLoanRef.id) }, { merge: true });
+
+        try {
+            await batch.commit();
+            setMessage(`Loan "${newLoanName}" created successfully!`);
+            setNewLoanName('');
+            onSelectLoan(newLoanRef.id);
+        } catch (err) {
+            console.error("Error creating loan:", err);
+            setError("Failed to create loan. Please try again.");
+        } finally {
+            setIsCreating(false);
+        }
+    };
+
+    const handleJoinLoan = async (e) => {
+        e.preventDefault();
+        if (!joinLoanId.trim()) {
+            setError("Please enter a Loan ID to join.");
+            return;
+        }
+        setIsJoining(true);
+        setError('');
+        setMessage('');
+
+        const trimmedLoanId = joinLoanId.trim();
+        // Corrected paths for joining a loan
+        const loanDocRef = doc(db, `artifacts/${appId}/public/data/loans/${trimmedLoanId}`);
+        const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
+
+        try {
+            const loanDocQuery = query(collection(db, `artifacts/${appId}/public/data/loans`), where('__name__', '==', trimmedLoanId));
+            const loanDocSnapshot = await getDocs(loanDocQuery);
+            if (loanDocSnapshot.empty) {
+                setError("Loan ID not found. Please check the ID and try again.");
+                setIsJoining(false);
+                return;
+            }
+
+            const batch = writeBatch(db);
+            batch.update(loanDocRef, { members: arrayUnion(userId) });
+            batch.set(userDocRef, { loans: arrayUnion(trimmedLoanId) }, { merge: true });
+            await batch.commit();
+
+            setMessage("Successfully joined the loan!");
+            setJoinLoanId('');
+        } catch (err) {
+            console.error("Error joining loan:", err);
+            setError("Failed to join loan. Please check the ID and try again.");
+        } finally {
+            setIsJoining(false);
+        }
+    };
+
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-200 flex items-center justify-center p-4">
+            <div className="w-full max-w-2xl mx-auto">
+                <div className="text-center mb-10">
+                    <h1 className="text-4xl sm:text-5xl font-bold text-gray-800">Loan Dashboard</h1>
+                    <p className="text-gray-600 mt-2">Welcome! Manage your shared loans here.</p>
+                    <p className="text-xs text-gray-500 mt-4 bg-gray-100 p-2 rounded-md inline-block">Your User ID: <span className="font-mono select-all">{userId}</span></p>
+                </div>
+                
+                {error && <p className="text-red-500 bg-red-100 p-3 rounded-lg mb-4 text-center">{error}</p>}
+                {message && <p className="text-green-500 bg-green-100 p-3 rounded-lg mb-4 text-center">{message}</p>}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Create New Loan */}
+                    <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
+                        <h2 className="text-2xl font-semibold text-gray-700 mb-4 flex items-center">
+                            <Icon path="M12 4.5v15m7.5-7.5h-15" className="w-6 h-6 mr-2 text-indigo-500" />
+                            Create a New Loan
+                        </h2>
+                        <form onSubmit={handleCreateLoan}>
+                            <input
+                                type="text"
+                                value={newLoanName}
+                                onChange={(e) => setNewLoanName(e.target.value)}
+                                placeholder="e.g., Family Car Loan"
+                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
+                            />
+                            <button type="submit" disabled={isCreating} className="w-full mt-4 bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition shadow-md disabled:bg-indigo-300 flex items-center justify-center">
+                                {isCreating ? <Spinner /> : 'Create & Go'}
+                            </button>
+                        </form>
+                    </div>
+
+                    {/* Join Existing Loan */}
+                    <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
+                        <h2 className="text-2xl font-semibold text-gray-700 mb-4 flex items-center">
+                             <Icon path="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3.375 19.125a7.125 7.125 0 0 1 14.25 0" className="w-6 h-6 mr-2 text-teal-500" />
+                            Join an Existing Loan
+                        </h2>
+                        <form onSubmit={handleJoinLoan}>
+                            <input
+                                type="text"
+                                value={joinLoanId}
+                                onChange={(e) => setJoinLoanId(e.target.value)}
+                                placeholder="Enter Loan ID"
+                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 transition"
+                            />
+                            <button type="submit" disabled={isJoining} className="w-full mt-4 bg-teal-600 text-white py-3 rounded-lg hover:bg-teal-700 transition shadow-md disabled:bg-teal-300 flex items-center justify-center">
+                                {isJoining ? <Spinner /> : 'Join Loan'}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                {/* My Loans List */}
+                <div className="mt-10 bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
+                     <h2 className="text-2xl font-semibold text-gray-700 mb-4 flex items-center">
+                        <Icon path="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.75A.75.75 0 0 1 3 4.5h.75m0 0h.75A.75.75 0 0 1 4.5 6v.75m0 0v.75a.75.75 0 0 1-.75.75h-.75m0 0H3.75m0 0a.75.75 0 0 1-.75-.75V6m0 0V5.25m0 0A.75.75 0 0 1 3.75 4.5h.75M15 4.5v.75A.75.75 0 0 1 14.25 6h-.75m0 0v-.75a.75.75 0 0 1 .75-.75h.75m0 0h.75a.75.75 0 0 1 .75.75v.75m0 0v.75a.75.75 0 0 1-.75.75h-.75m0 0h-.75m0 0a.75.75 0 0 1-.75-.75V6m0 0v-.75m1.5.75a.75.75 0 0 1 .75-.75h.75a.75.75 0 0 1 .75.75v.75m0 0v.75a.75.75 0 0 1-.75.75h-.75a.75.75 0 0 1-.75-.75V6m3 12.75v-6.161c0-.853-.48-1.635-1.28-2.033l-7.443-4.148a.75.75 0 0 0-.976.652v11.342a.75.75 0 0 0 .976.652l7.443-4.148c.8-.398 1.28-1.18 1.28-2.033Z" className="w-6 h-6 mr-2 text-amber-500" />
+                        My Loans
+                    </h2>
+                    {loading ? (
+                        <div className="flex justify-center p-4"><Spinner /></div>
+                    ) : userLoans.length > 0 ? (
+                        <ul className="space-y-3">
+                            {userLoans.map(loan => (
+                                <li key={loan.id} onClick={() => onSelectLoan(loan.id)} className="bg-gray-50 p-4 rounded-lg flex justify-between items-center cursor-pointer hover:bg-indigo-100 hover:shadow-md transition group">
+                                    <div>
+                                        <p className="font-semibold text-gray-800 group-hover:text-indigo-800">{loan.appTitle}</p>
+                                        <p className="text-xs text-gray-500 font-mono">ID: {loan.id}</p>
+                                    </div>
+                                    <Icon path="m8.25 4.5 7.5 7.5-7.5 7.5" className="w-5 h-5 text-gray-400 group-hover:text-indigo-600 transition" />
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p className="text-center text-gray-500 py-4">You are not part of any loans yet. Create one or join one to get started!</p>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// --- Main Loan Application Screen (Refactored from original code) ---
+
+function LoanDetailScreen({ userId, loanId, onBack }) {
+  const [transactions, setTransactions] = useState([]);
+  const [initialLoanAmount, setInitialLoanAmount] = useState('');
+  const [initialLoanDate, setInitialLoanDate] = useState('');
+  const [interestRate, setInterestRate] = useState('');
+  const [appTitle, setAppTitle] = useState('Loan Tracker');
+  const [newTransactionDate, setNewTransactionDate] = useState('');
+  const [newTransactionType, setNewTransactionType] = useState('payment');
+  const [newTransactionAmount, setNewTransactionAmount] = useState('');
+  const [newTransactionDescription, setNewTransactionDescription] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState('');
+  const [editingTransactionId, setEditingTransactionId] = useState(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [transactionToDelete, setTransactionToDelete] = useState(null);
+  const [showLoanSetup, setShowLoanSetup] = useState(true);
+  const [targetPayoffDate, setTargetPayoffDate] = useState('');
+  const [estimatedMonthlyPayment, setEstimatedMonthlyPayment] = useState(null);
+  const [payoffCalculationMessage, setPayoffCalculationMessage] = useState('');
+  const [inputtedPaymentAmount, setInputtedPaymentAmount] = useState('');
+  const [projectedPayoffDate, setProjectedPayoffDate] = useState(null);
+  const [projectedPayoffMessage, setProjectedPayoffMessage] = useState('');
+  const [filterType, setFilterType] = useState('all');
+  const [sortColumn, setSortColumn] = useState('date');
+  const [sortDirection, setSortDirection] = useState('asc');
+  const [hoveredPoint, setHoveredPoint] = useState(null);
+  
+  const getTodayDate = () => {
+    const today = new Date();
+    return today.toISOString().split('T')[0];
+  };
+
+  useEffect(() => {
+    setNewTransactionDate(getTodayDate());
+    setInitialLoanDate(getTodayDate());
+    setTargetPayoffDate(getTodayDate());
+  }, []);
+
+  // Fetch initial settings and transactions for the specific loan
+  useEffect(() => {
+    if (!userId || !loanId) return;
+
+    setLoading(true);
+    // Corrected paths for loan settings and transactions
+    const settingsDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
+    const unsubscribeSettings = onSnapshot(settingsDocRef, (docSnap) => {
+      if (docSnap.exists() && docSnap.data().settings) {
+        const data = docSnap.data().settings;
+        setInitialLoanAmount(data.initialLoanAmount || '');
+        setInitialLoanDate(data.initialLoanDate ? data.initialLoanDate.toDate().toISOString().split('T')[0] : getTodayDate());
+        setInterestRate(data.interestRate || '');
+        setAppTitle(data.appTitle || 'Family Loan Tracker');
+        if (data.initialLoanAmount && data.initialLoanDate) {
+          setShowLoanSetup(false);
+        }
+      } else {
+        setMessage('Please set the initial loan amount and annual interest rate.');
+        setShowLoanSetup(true);
+      }
+    }, (error) => {
+      console.error("Error fetching settings:", error);
+      setMessage("Error loading settings.");
+    });
+
+    const transactionsColRef = collection(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`);
+    const q = query(transactionsColRef, orderBy('date', 'asc'));
+    const unsubscribeTransactions = onSnapshot(q, (snapshot) => {
+      const fetchedTransactions = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        date: doc.data().date.toDate(),
+      }));
+      setTransactions(fetchedTransactions);
+      setLoading(false);
+    }, (error) => {
+      console.error("Error fetching transactions:", error);
+      setMessage("Error loading transactions.");
+      setLoading(false);
+    });
+
+    return () => {
+      unsubscribeSettings();
+      unsubscribeTransactions();
+    };
+  }, [userId, loanId]);
+
+  // Handle saving initial loan and interest rate
+  const handleSaveSettings = async () => {
+    if (!userId || !loanId) {
+      setMessage("Authentication not ready. Please wait.");
+      return;
+    }
+    if (isNaN(parseFloat(initialLoanAmount)) || isNaN(parseFloat(interestRate)) || !initialLoanDate) {
+      setMessage("Please enter valid numbers for loan amount and interest rate, and select a date.");
+      return;
+    }
+
+    setLoading(true);
+    const settingsDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
+    try {
+      await setDoc(settingsDocRef, {
+        settings: {
+          initialLoanAmount: parseFloat(initialLoanAmount),
+          initialLoanDate: Timestamp.fromDate(new Date(initialLoanDate)),
+          interestRate: parseFloat(interestRate),
+          appTitle: appTitle,
+          lastUpdated: Timestamp.now(),
+        }
+      }, { merge: true });
+      setMessage("Settings saved successfully!");
+      setShowLoanSetup(false);
+    } catch (error) {
+      console.error("Error saving settings:", error);
+      setMessage("Failed to save settings.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle adding or updating a transaction
+  const handleAddOrUpdateTransaction = async (e) => {
+    e.preventDefault();
+    if (!userId || !loanId) return;
+    if (!newTransactionDate || isNaN(parseFloat(newTransactionAmount)) || parseFloat(newTransactionAmount) <= 0) {
+        setMessage("Please enter a valid date and amount.");
+        return;
+    }
+
+    setLoading(true);
+    const transactionData = {
+        date: Timestamp.fromDate(new Date(newTransactionDate)),
+        type: newTransactionType,
+        amount: parseFloat(newTransactionAmount),
+        description: newTransactionDescription || `${newTransactionType} on ${new Date(newTransactionDate).toLocaleDateString()}`,
+        authorId: userId,
+        createdAt: Timestamp.now(),
+    };
+
+    const transactionsColRef = collection(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`);
+    try {
+        if (editingTransactionId) {
+            const transactionDocRef = doc(transactionsColRef, editingTransactionId);
+            await setDoc(transactionDocRef, transactionData, { merge: true });
+            setMessage("Transaction updated!");
+            setEditingTransactionId(null);
+        } else {
+            await addDoc(transactionsColRef, transactionData);
+            setMessage("Transaction added!");
+        }
+        setNewTransactionAmount('');
+        setNewTransactionDescription('');
+        setNewTransactionDate(getTodayDate());
+    } catch (error) {
+        console.error("Error with transaction:", error);
+        setMessage("Failed to save transaction.");
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  // Handle deleting a transaction
+  const handleDeleteTransaction = async () => {
+    if (!userId || !loanId || !transactionToDelete) return;
+    setLoading(true);
+    const transactionDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`, transactionToDelete);
+    try {
+        await deleteDoc(transactionDocRef);
+        setMessage("Transaction deleted.");
+    } catch (error) {
+        console.error("Error deleting transaction:", error);
+        setMessage("Failed to delete transaction.");
+    } finally {
+        setLoading(false);
+        setShowDeleteConfirm(false);
+        setTransactionToDelete(null);
+    }
+  };
+
+  const calculateDisplayTransactions = useCallback(() => {
+    if (!initialLoanAmount || !initialLoanDate) {
+      return { transactions: [], currentRunningBalance: 0, totalPaymentsMade: 0, totalPrincipalPaid: 0, lastPayment: null };
+    }
+
+    let runningBalance = parseFloat(initialLoanAmount);
+    const calculatedTransactions = [];
+    let totalPayments = 0;
+    let lastPaymentDetails = null;
+
+    const sortedTransactions = [...transactions].sort((a, b) => a.date.getTime() - b.date.getTime());
+    
+    calculatedTransactions.push({
+        id: 'initial',
+        date: new Date(initialLoanDate),
+        description: 'Initial Loan Amount',
+        amount: parseFloat(initialLoanAmount),
+        type: 'initial',
+        runningBalance: runningBalance,
+        isInitial: true,
+    });
+
+    sortedTransactions.forEach(t => {
+        const amount = parseFloat(t.amount);
+        if (t.type === 'payment') {
+            runningBalance -= amount;
+            totalPayments += amount;
+            lastPaymentDetails = { date: t.date, amount: amount };
+        } else if (t.type === 'loanIncrease') {
+            runningBalance += amount;
+        }
+        calculatedTransactions.push({ ...t, runningBalance });
+    });
+
+    return { 
+        transactions: calculatedTransactions, 
+        currentRunningBalance: runningBalance, 
+        totalPaymentsMade: totalPayments, 
+        lastPayment: lastPaymentDetails 
+    };
+  }, [transactions, initialLoanAmount, initialLoanDate, interestRate]);
+
+  const { transactions: allCalculatedTransactions, currentRunningBalance, totalPaymentsMade, lastPayment } = useMemo(
+    () => calculateDisplayTransactions(),
+    [calculateDisplayTransactions]
+  );
+    
+  const percentagePaidOff = useMemo(() => {
+    if (parseFloat(initialLoanAmount) <= 0) return 0;
+    const paidAmount = parseFloat(initialLoanAmount) - currentRunningBalance;
+    return Math.max(0, Math.min(100, (paidAmount / parseFloat(initialLoanAmount)) * 100));
+  }, [initialLoanAmount, currentRunningBalance]);
+
+  const displayTransactions = useMemo(() => {
+    let filtered = allCalculatedTransactions;
+    if (filterType !== 'all') {
+      filtered = filtered.filter(t => t.type === filterType);
+    }
+    return filtered;
+  }, [allCalculatedTransactions, filterType, sortColumn, sortDirection]);
+
+  const handleEditTransaction = (transaction) => {
+    setEditingTransactionId(transaction.id);
+    setNewTransactionDate(transaction.date.toISOString().split('T')[0]);
+    setNewTransactionType(transaction.type);
+    setNewTransactionAmount(transaction.amount.toString());
+    setNewTransactionDescription(transaction.description || '');
+    setMessage('Editing transaction. Make changes and click "Update Transaction".');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingTransactionId(null);
+    setNewTransactionDate(getTodayDate());
+    setNewTransactionType('payment');
+    setNewTransactionAmount('');
+    setNewTransactionDescription('');
+    setMessage('');
+  };
+
+  const handleDeleteConfirm = (transactionId) => {
+    setTransactionToDelete(transactionId);
+    setShowDeleteConfirm(true);
+  };
+
+  const isLoanPaidOff = currentRunningBalance <= 0 && parseFloat(initialLoanAmount) > 0;
+
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 font-inter text-gray-800 p-4 sm:p-6 lg:p-8">
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap'); body { font-family: 'Inter', sans-serif; }`}</style>
+        
+        <div className="max-w-4xl mx-auto">
+            <button onClick={onBack} className="mb-6 flex items-center text-indigo-600 hover:text-indigo-800 font-semibold transition">
+                <Icon path="M15.75 19.5 8.25 12l7.5-7.5" className="w-5 h-5 mr-2" />
+                Back to My Loans
+            </button>
+
+            <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-xl border border-blue-200">
+                <div className="text-center mb-6">
+                    <h1 className="text-3xl sm:text-4xl font-bold text-indigo-700">{appTitle}</h1>
+                    <p className="text-xs text-gray-500 mt-2 bg-gray-100 p-2 rounded-md inline-block">Loan ID: <span className="font-mono select-all">{loanId}</span> (Share this to invite others)</p>
+                </div>
+                
+                <div className="bg-indigo-100 border border-indigo-300 text-indigo-900 p-4 sm:p-6 rounded-xl shadow-md mb-8 text-center">
+                    <h2 className="text-xl sm:text-2xl font-semibold mb-2">Current Loan Balance</h2>
+                    {isLoanPaidOff ? (
+                        <p className="text-4xl sm:text-5xl font-bold text-green-700">$0.00 - Paid Off! 🎉</p>
+                    ) : (
+                        <p className="text-4xl sm:text-5xl font-bold text-indigo-700">${currentRunningBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                    )}
+                    {parseFloat(initialLoanAmount) > 0 && (
+                        <p className="text-lg font-semibold text-indigo-600 mt-2">{percentagePaidOff.toFixed(2)}% Paid Off</p>
+                    )}
+                </div>
+
+                <div className="bg-white p-4 sm:p-6 rounded-xl shadow-lg border border-gray-200 overflow-x-auto">
+                    <h2 className="text-xl sm:text-2xl font-semibold text-gray-700 mb-4">Transaction History</h2>
+                    {displayTransactions.length === 0 && !loading ? (
+                        <p className="text-center text-gray-500">No transactions yet.</p>
+                    ) : (
+                        <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Balance</th>
+                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                                {displayTransactions.map((t) => (
+                                <tr key={t.id} className={t.isInitial ? 'bg-blue-50 font-semibold' : 'hover:bg-gray-50'}>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.date.toLocaleDateString()}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.description}</td>
+                                    <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${t.type === 'payment' ? 'text-green-600' : 'text-red-600'}`}>
+                                        {t.type !== 'initial' && (t.type === 'payment' ? '-' : '+')}
+                                        ${t.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-right">${t.runningBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                        {!t.isInitial && (
+                                            <>
+                                            <button onClick={() => handleEditTransaction(t)} className="text-indigo-600 hover:text-indigo-900 mr-3">Edit</button>
+                                            <button onClick={() => handleDeleteConfirm(t.id)} className="text-red-600 hover:text-red-900">Delete</button>
+                                            </>
+                                        )}
+                                    </td>
+                                </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
+                </div>
+
+                <div className={`bg-green-50 p-4 sm:p-6 rounded-xl shadow-inner mt-8 border border-green-200 ${isLoanPaidOff ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                    <h2 className="text-xl sm:text-2xl font-semibold text-green-700 mb-4">{editingTransactionId ? 'Edit Transaction' : 'Add New Transaction'}</h2>
+                    {!isLoanPaidOff && (
+                        <form onSubmit={handleAddOrUpdateTransaction} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="sm:col-span-2 flex gap-4">
+                                <button type="submit" disabled={loading} className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 shadow-md">
+                                    {editingTransactionId ? 'Update' : 'Add'}
+                                </button>
+                                {editingTransactionId && <button type="button" onClick={handleCancelEdit} className="flex-1 bg-gray-400 text-white py-2 px-4 rounded-lg hover:bg-gray-500">Cancel</button>}
+                            </div>
+                        </form>
+                    )}
+                </div>
+
+                <div className="bg-indigo-50 p-4 sm:p-6 rounded-xl shadow-inner mt-8 border border-indigo-200">
+                    <h2 className="text-xl sm:text-2xl font-semibold text-indigo-600 mb-4">Loan Setup</h2>
+                     <form onSubmit={(e) => { e.preventDefault(); handleSaveSettings(); }} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="md:col-span-2">
+                             <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md">Save Settings</button>
+                        </div>
+                     </form>
+                </div>
+
+                {showDeleteConfirm && (
+                    <Modal onClose={() => setShowDeleteConfirm(false)}>
+                        <h3 className="text-lg font-semibold text-gray-900 mb-4">Confirm Deletion</h3>
+                        <p className="text-sm text-gray-700 mb-6">Are you sure? This cannot be undone.</p>
+                        <div className="flex justify-end space-x-3">
+                            <button onClick={() => setShowDeleteConfirm(false)} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Cancel</button>
+                            <button onClick={handleDeleteTransaction} disabled={loading} className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700">{loading ? 'Deleting...' : 'Delete'}</button>
+                        </div>
+                    </Modal>
+                )}
+            </div>
+        </div>
     </div>
   );
+}
+
+
+// --- Main App Component (Router) ---
+
+function App() {
+    const [userId, setUserId] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
+    const [selectedLoanId, setSelectedLoanId] = useState(null);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                setUserId(user.uid);
+                setIsAuthReady(true);
+            } else {
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    // The onAuthStateChanged listener will be called again with the new user
+                } catch (error) {
+                    console.error("Firebase authentication failed:", error);
+                    setIsAuthReady(true); // Still set to true to prevent infinite loading screen
+                }
+            }
+        });
+        return () => unsubscribe();
+    }, []);
+
+    const handleSelectLoan = (loanId) => {
+        setSelectedLoanId(loanId);
+    };
+
+    const handleBackToDashboard = () => {
+        setSelectedLoanId(null);
+    };
+
+    if (!isAuthReady) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-gray-100">
+                <div className="text-center">
+                    <Spinner />
+                    <p className="mt-4 text-lg font-semibold text-gray-700">Connecting...</p>
+                </div>
+            </div>
+        );
+    }
+    
+    return (
+        <>
+            {selectedLoanId ? (
+                <LoanDetailScreen userId={userId} loanId={selectedLoanId} onBack={handleBackToDashboard} />
+            ) : (
+                <LoginScreen userId={userId} onSelectLoan={handleSelectLoan} />
+            )}
+        </>
+    );
 }
 
 export default App;

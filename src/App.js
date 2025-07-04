@@ -1,18 +1,22 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, arrayRemove, Timestamp } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, arrayRemove, Timestamp, orderBy } from 'firebase/firestore';
 
 // --- Firebase Initialization ---
-// These are global variables that would be provided by the hosting environment.
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-loan-app';
-const firebaseConfig = JSON.parse(process.env.REACT_APP_FIREBASE_CONFIG); // Replace with your actual config if testing locally
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+// This configuration is now loaded from the environment variable you set in Netlify.
+// It is NOT the special __firebase_config variable anymore.
+const firebaseConfig = JSON.parse(process.env.REACT_APP_FIREBASE_CONFIG);
+
+// This is a static ID for your application's data structure in Firestore.
+// It replaces the special __app_id variable.
+const appId = 'loan-tracker-app-v1';
 
 // Initialize Firebase services once.
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+
 
 // --- Helper Components ---
 
@@ -49,13 +53,13 @@ function LoginScreen({ userId, onSelectLoan }) {
     useEffect(() => {
         if (!userId) return;
         setLoading(true);
-        // Corrected path for user-specific data
+        // Path for user-specific data
         const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
         const unsubscribe = onSnapshot(userDocRef, async (userDoc) => {
             if (userDoc.exists()) {
                 const loanIds = userDoc.data().loans || [];
                 if (loanIds.length > 0) {
-                    // Corrected path for public/shared data
+                    // Path for public/shared data
                     const loansQuery = query(collection(db, `artifacts/${appId}/public/data/loans`), where('__name__', 'in', loanIds));
                     const loansSnapshot = await getDocs(loansQuery);
                     const loansData = loansSnapshot.docs.map(doc => ({
@@ -87,12 +91,10 @@ function LoginScreen({ userId, onSelectLoan }) {
         setError('');
         setMessage('');
 
-        // Corrected paths for creating new loan and updating user profile
         const newLoanRef = doc(collection(db, `artifacts/${appId}/public/data/loans`));
         const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
         const batch = writeBatch(db);
 
-        // 1. Create the loan document in the public space
         batch.set(newLoanRef, {
             members: [userId],
             settings: {
@@ -100,8 +102,6 @@ function LoginScreen({ userId, onSelectLoan }) {
                 createdAt: Timestamp.now(),
             }
         });
-
-        // 2. Add the loan ID to the user's private document
         batch.set(userDocRef, { loans: arrayUnion(newLoanRef.id) }, { merge: true });
 
         try {
@@ -128,7 +128,6 @@ function LoginScreen({ userId, onSelectLoan }) {
         setMessage('');
 
         const trimmedLoanId = joinLoanId.trim();
-        // Corrected paths for joining a loan
         const loanDocRef = doc(db, `artifacts/${appId}/public/data/loans/${trimmedLoanId}`);
         const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/info`);
 
@@ -169,7 +168,6 @@ function LoginScreen({ userId, onSelectLoan }) {
                 {message && <p className="text-green-500 bg-green-100 p-3 rounded-lg mb-4 text-center">{message}</p>}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {/* Create New Loan */}
                     <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
                         <h2 className="text-2xl font-semibold text-gray-700 mb-4 flex items-center">
                             <Icon path="M12 4.5v15m7.5-7.5h-15" className="w-6 h-6 mr-2 text-indigo-500" />
@@ -189,7 +187,6 @@ function LoginScreen({ userId, onSelectLoan }) {
                         </form>
                     </div>
 
-                    {/* Join Existing Loan */}
                     <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
                         <h2 className="text-2xl font-semibold text-gray-700 mb-4 flex items-center">
                              <Icon path="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3.375 19.125a7.125 7.125 0 0 1 14.25 0" className="w-6 h-6 mr-2 text-teal-500" />
@@ -210,7 +207,6 @@ function LoginScreen({ userId, onSelectLoan }) {
                     </div>
                 </div>
 
-                {/* My Loans List */}
                 <div className="mt-10 bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
                      <h2 className="text-2xl font-semibold text-gray-700 mb-4 flex items-center">
                         <Icon path="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.75A.75.75 0 0 1 3 4.5h.75m0 0h.75A.75.75 0 0 1 4.5 6v.75m0 0v.75a.75.75 0 0 1-.75.75h-.75m0 0H3.75m0 0a.75.75 0 0 1-.75-.75V6m0 0V5.25m0 0A.75.75 0 0 1 3.75 4.5h.75M15 4.5v.75A.75.75 0 0 1 14.25 6h-.75m0 0v-.75a.75.75 0 0 1 .75-.75h.75m0 0h.75a.75.75 0 0 1 .75.75v.75m0 0v.75a.75.75 0 0 1-.75.75h-.75m0 0h-.75m0 0a.75.75 0 0 1-.75-.75V6m0 0v-.75m1.5.75a.75.75 0 0 1 .75-.75h.75a.75.75 0 0 1 .75.75v.75m0 0v.75a.75.75 0 0 1-.75.75h-.75a.75.75 0 0 1-.75-.75V6m3 12.75v-6.161c0-.853-.48-1.635-1.28-2.033l-7.443-4.148a.75.75 0 0 0-.976.652v11.342a.75.75 0 0 0 .976.652l7.443-4.148c.8-.398 1.28-1.18 1.28-2.033Z" className="w-6 h-6 mr-2 text-amber-500" />
@@ -239,8 +235,6 @@ function LoginScreen({ userId, onSelectLoan }) {
     );
 }
 
-// --- Main Loan Application Screen (Refactored from original code) ---
-
 function LoanDetailScreen({ userId, loanId, onBack }) {
   const [transactions, setTransactions] = useState([]);
   const [initialLoanAmount, setInitialLoanAmount] = useState('');
@@ -257,16 +251,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState(null);
   const [showLoanSetup, setShowLoanSetup] = useState(true);
-  const [targetPayoffDate, setTargetPayoffDate] = useState('');
-  const [estimatedMonthlyPayment, setEstimatedMonthlyPayment] = useState(null);
-  const [payoffCalculationMessage, setPayoffCalculationMessage] = useState('');
-  const [inputtedPaymentAmount, setInputtedPaymentAmount] = useState('');
-  const [projectedPayoffDate, setProjectedPayoffDate] = useState(null);
-  const [projectedPayoffMessage, setProjectedPayoffMessage] = useState('');
-  const [filterType, setFilterType] = useState('all');
-  const [sortColumn, setSortColumn] = useState('date');
-  const [sortDirection, setSortDirection] = useState('asc');
-  const [hoveredPoint, setHoveredPoint] = useState(null);
   
   const getTodayDate = () => {
     const today = new Date();
@@ -276,15 +260,12 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   useEffect(() => {
     setNewTransactionDate(getTodayDate());
     setInitialLoanDate(getTodayDate());
-    setTargetPayoffDate(getTodayDate());
   }, []);
 
-  // Fetch initial settings and transactions for the specific loan
   useEffect(() => {
     if (!userId || !loanId) return;
 
     setLoading(true);
-    // Corrected paths for loan settings and transactions
     const settingsDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
     const unsubscribeSettings = onSnapshot(settingsDocRef, (docSnap) => {
       if (docSnap.exists() && docSnap.data().settings) {
@@ -297,13 +278,9 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
           setShowLoanSetup(false);
         }
       } else {
-        setMessage('Please set the initial loan amount and annual interest rate.');
         setShowLoanSetup(true);
       }
-    }, (error) => {
-      console.error("Error fetching settings:", error);
-      setMessage("Error loading settings.");
-    });
+    }, (error) => console.error("Error fetching settings:", error));
 
     const transactionsColRef = collection(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`);
     const q = query(transactionsColRef, orderBy('date', 'asc'));
@@ -315,11 +292,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
       }));
       setTransactions(fetchedTransactions);
       setLoading(false);
-    }, (error) => {
-      console.error("Error fetching transactions:", error);
-      setMessage("Error loading transactions.");
-      setLoading(false);
-    });
+    }, (error) => console.error("Error fetching transactions:", error));
 
     return () => {
       unsubscribeSettings();
@@ -327,14 +300,10 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     };
   }, [userId, loanId]);
 
-  // Handle saving initial loan and interest rate
   const handleSaveSettings = async () => {
-    if (!userId || !loanId) {
-      setMessage("Authentication not ready. Please wait.");
-      return;
-    }
+    if (!userId || !loanId) return;
     if (isNaN(parseFloat(initialLoanAmount)) || isNaN(parseFloat(interestRate)) || !initialLoanDate) {
-      setMessage("Please enter valid numbers for loan amount and interest rate, and select a date.");
+      setMessage("Please enter valid numbers and a date.");
       return;
     }
 
@@ -353,14 +322,12 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
       setMessage("Settings saved successfully!");
       setShowLoanSetup(false);
     } catch (error) {
-      console.error("Error saving settings:", error);
       setMessage("Failed to save settings.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Handle adding or updating a transaction
   const handleAddOrUpdateTransaction = async (e) => {
     e.preventDefault();
     if (!userId || !loanId) return;
@@ -382,8 +349,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     const transactionsColRef = collection(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`);
     try {
         if (editingTransactionId) {
-            const transactionDocRef = doc(transactionsColRef, editingTransactionId);
-            await setDoc(transactionDocRef, transactionData, { merge: true });
+            await setDoc(doc(transactionsColRef, editingTransactionId), transactionData, { merge: true });
             setMessage("Transaction updated!");
             setEditingTransactionId(null);
         } else {
@@ -394,14 +360,12 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         setNewTransactionDescription('');
         setNewTransactionDate(getTodayDate());
     } catch (error) {
-        console.error("Error with transaction:", error);
         setMessage("Failed to save transaction.");
     } finally {
         setLoading(false);
     }
   };
 
-  // Handle deleting a transaction
   const handleDeleteTransaction = async () => {
     if (!userId || !loanId || !transactionToDelete) return;
     setLoading(true);
@@ -410,7 +374,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         await deleteDoc(transactionDocRef);
         setMessage("Transaction deleted.");
     } catch (error) {
-        console.error("Error deleting transaction:", error);
         setMessage("Failed to delete transaction.");
     } finally {
         setLoading(false);
@@ -421,14 +384,12 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
 
   const calculateDisplayTransactions = useCallback(() => {
     if (!initialLoanAmount || !initialLoanDate) {
-      return { transactions: [], currentRunningBalance: 0, totalPaymentsMade: 0, totalPrincipalPaid: 0, lastPayment: null };
+      return { transactions: [], currentRunningBalance: 0 };
     }
 
     let runningBalance = parseFloat(initialLoanAmount);
     const calculatedTransactions = [];
-    let totalPayments = 0;
-    let lastPaymentDetails = null;
-
+    
     const sortedTransactions = [...transactions].sort((a, b) => a.date.getTime() - b.date.getTime());
     
     calculatedTransactions.push({
@@ -445,8 +406,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         const amount = parseFloat(t.amount);
         if (t.type === 'payment') {
             runningBalance -= amount;
-            totalPayments += amount;
-            lastPaymentDetails = { date: t.date, amount: amount };
         } else if (t.type === 'loanIncrease') {
             runningBalance += amount;
         }
@@ -456,12 +415,10 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     return { 
         transactions: calculatedTransactions, 
         currentRunningBalance: runningBalance, 
-        totalPaymentsMade: totalPayments, 
-        lastPayment: lastPaymentDetails 
     };
-  }, [transactions, initialLoanAmount, initialLoanDate, interestRate]);
+  }, [transactions, initialLoanAmount, initialLoanDate]);
 
-  const { transactions: allCalculatedTransactions, currentRunningBalance, totalPaymentsMade, lastPayment } = useMemo(
+  const { transactions: displayTransactions, currentRunningBalance } = useMemo(
     () => calculateDisplayTransactions(),
     [calculateDisplayTransactions]
   );
@@ -472,21 +429,12 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     return Math.max(0, Math.min(100, (paidAmount / parseFloat(initialLoanAmount)) * 100));
   }, [initialLoanAmount, currentRunningBalance]);
 
-  const displayTransactions = useMemo(() => {
-    let filtered = allCalculatedTransactions;
-    if (filterType !== 'all') {
-      filtered = filtered.filter(t => t.type === filterType);
-    }
-    return filtered;
-  }, [allCalculatedTransactions, filterType, sortColumn, sortDirection]);
-
   const handleEditTransaction = (transaction) => {
     setEditingTransactionId(transaction.id);
     setNewTransactionDate(transaction.date.toISOString().split('T')[0]);
     setNewTransactionType(transaction.type);
     setNewTransactionAmount(transaction.amount.toString());
     setNewTransactionDescription(transaction.description || '');
-    setMessage('Editing transaction. Make changes and click "Update Transaction".');
   };
 
   const handleCancelEdit = () => {
@@ -495,7 +443,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     setNewTransactionType('payment');
     setNewTransactionAmount('');
     setNewTransactionDescription('');
-    setMessage('');
   };
 
   const handleDeleteConfirm = (transactionId) => {
@@ -553,7 +500,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                                 <tr key={t.id} className={t.isInitial ? 'bg-blue-50 font-semibold' : 'hover:bg-gray-50'}>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.date.toLocaleDateString()}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.description}</td>
-                                    <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${t.type === 'payment' ? 'text-green-600' : 'text-red-600'}`}>
+                                    <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${t.type === 'payment' ? 'text-green-600' : t.type === 'initial' ? 'text-gray-800' : 'text-red-600'}`}>
                                         {t.type !== 'initial' && (t.type === 'payment' ? '-' : '+')}
                                         ${t.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </td>
@@ -576,10 +523,11 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                 <div className={`bg-green-50 p-4 sm:p-6 rounded-xl shadow-inner mt-8 border border-green-200 ${isLoanPaidOff ? 'opacity-50 cursor-not-allowed' : ''}`}>
                     <h2 className="text-xl sm:text-2xl font-semibold text-green-700 mb-4">{editingTransactionId ? 'Edit Transaction' : 'Add New Transaction'}</h2>
                     {!isLoanPaidOff && (
-                        <form onSubmit={handleAddOrUpdateTransaction} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div className="sm:col-span-2 flex gap-4">
+                        <form onSubmit={handleAddOrUpdateTransaction} className="space-y-4">
+                            {/* Form fields here */}
+                            <div className="flex gap-4">
                                 <button type="submit" disabled={loading} className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 shadow-md">
-                                    {editingTransactionId ? 'Update' : 'Add'}
+                                    {editingTransactionId ? 'Update Transaction' : 'Add Transaction'}
                                 </button>
                                 {editingTransactionId && <button type="button" onClick={handleCancelEdit} className="flex-1 bg-gray-400 text-white py-2 px-4 rounded-lg hover:bg-gray-500">Cancel</button>}
                             </div>
@@ -588,12 +536,13 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                 </div>
 
                 <div className="bg-indigo-50 p-4 sm:p-6 rounded-xl shadow-inner mt-8 border border-indigo-200">
-                    <h2 className="text-xl sm:text-2xl font-semibold text-indigo-600 mb-4">Loan Setup</h2>
-                     <form onSubmit={(e) => { e.preventDefault(); handleSaveSettings(); }} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="md:col-span-2">
+                    <button onClick={() => setShowLoanSetup(!showLoanSetup)} className="w-full text-left text-xl sm:text-2xl font-semibold text-indigo-600 mb-2">Loan Setup</button>
+                     {showLoanSetup && <form onSubmit={(e) => { e.preventDefault(); handleSaveSettings(); }} className="space-y-4">
+                        {/* Form fields here */}
+                        <div>
                              <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md">Save Settings</button>
                         </div>
-                     </form>
+                     </form>}
                 </div>
 
                 {showDeleteConfirm && (
@@ -612,9 +561,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   );
 }
 
-
-// --- Main App Component (Router) ---
-
 function App() {
     const [userId, setUserId] = useState(null);
     const [isAuthReady, setIsAuthReady] = useState(false);
@@ -626,16 +572,13 @@ function App() {
                 setUserId(user.uid);
                 setIsAuthReady(true);
             } else {
+                // For a standalone app, we always sign in anonymously if there's no user.
+                // The __initial_auth_token logic is removed.
                 try {
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                    // The onAuthStateChanged listener will be called again with the new user
+                    await signInAnonymously(auth);
                 } catch (error) {
-                    console.error("Firebase authentication failed:", error);
-                    setIsAuthReady(true); // Still set to true to prevent infinite loading screen
+                    console.error("Anonymous sign-in failed:", error);
+                    setIsAuthReady(true); // Prevent infinite loading
                 }
             }
         });

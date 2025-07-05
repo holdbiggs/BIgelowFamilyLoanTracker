@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, Timestamp, orderBy } from 'firebase/firestore';
+import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, arrayRemove, Timestamp, orderBy } from 'firebase/firestore';
 
 // --- Firebase Initialization ---
 const firebaseConfig = JSON.parse(process.env.REACT_APP_FIREBASE_CONFIG);
@@ -185,6 +185,7 @@ function DashboardScreen({ user, onSelectLoan }) {
     const [error, setError] = useState('');
     const [isCreating, setIsCreating] = useState(false);
     const [isJoining, setIsJoining] = useState(false);
+    const [loanToLeave, setLoanToLeave] = useState(null);
 
     // Function to generate a user-friendly, 6-character ID
     const generateFriendlyId = () => {
@@ -199,7 +200,6 @@ function DashboardScreen({ user, onSelectLoan }) {
     useEffect(() => {
         if (!user) return;
         setLoading(true);
-        // This query now finds all loans where the user's ID is in the 'members' array.
         const loansQuery = query(collection(db, `artifacts/${appId}/public/data/loans`), where('members', 'array-contains', user.uid));
         const unsubscribe = onSnapshot(loansQuery, (snapshot) => {
             const loansData = snapshot.docs.map(doc => ({
@@ -232,7 +232,6 @@ function DashboardScreen({ user, onSelectLoan }) {
         
         const batch = writeBatch(db);
 
-        // Set the new loan data, including the user-friendly ID
         batch.set(newLoanRef, {
             members: [user.uid],
             friendlyId: friendlyId,
@@ -297,8 +296,41 @@ function DashboardScreen({ user, onSelectLoan }) {
         }
     };
 
+    const handleLeaveLoan = async () => {
+        if (!loanToLeave || !user) return;
+        
+        const loanDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanToLeave.id}`);
+        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
+
+        const batch = writeBatch(db);
+        batch.update(loanDocRef, { members: arrayRemove(user.uid) });
+        batch.update(userDocRef, { loans: arrayRemove(loanToLeave.id) });
+
+        try {
+            await batch.commit();
+            setLoanToLeave(null); // Close the modal
+        } catch (err) {
+            console.error("Error leaving loan:", err);
+            setError("Failed to leave the loan. Please try again.");
+            setLoanToLeave(null);
+        }
+    };
+
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-200 p-4">
+            {loanToLeave && (
+                <Modal onClose={() => setLoanToLeave(null)}>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Leave Loan?</h3>
+                    <p className="text-sm text-gray-700 mb-6">
+                        Are you sure you want to leave the loan "{loanToLeave.settings.appTitle}"? You will lose access to it unless you are invited back.
+                    </p>
+                    <div className="flex justify-end space-x-3">
+                        <button onClick={() => setLoanToLeave(null)} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Cancel</button>
+                        <button onClick={handleLeaveLoan} className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700">Leave Loan</button>
+                    </div>
+                </Modal>
+            )}
+
             <div className="w-full max-w-2xl mx-auto">
                 <div className="flex justify-between items-center mb-10">
                     <div className="text-left">
@@ -362,12 +394,14 @@ function DashboardScreen({ user, onSelectLoan }) {
                     ) : userLoans.length > 0 ? (
                         <ul className="space-y-3">
                             {userLoans.map(loan => (
-                                <li key={loan.id} onClick={() => onSelectLoan(loan.id)} className="bg-gray-50 p-4 rounded-lg flex justify-between items-center cursor-pointer hover:bg-indigo-100 hover:shadow-md transition group">
-                                    <div>
+                                <li key={loan.id} className="bg-gray-50 p-4 rounded-lg flex justify-between items-center transition group">
+                                    <div onClick={() => onSelectLoan(loan.id)} className="flex-grow cursor-pointer">
                                         <p className="font-semibold text-gray-800 group-hover:text-indigo-800">{loan.settings.appTitle || "Untitled Loan"}</p>
                                         <p className="text-xs text-gray-500 font-mono">CODE: {loan.friendlyId}</p>
                                     </div>
-                                    <Icon path="m8.25 4.5 7.5 7.5-7.5 7.5" className="w-5 h-5 text-gray-400 group-hover:text-indigo-600 transition" />
+                                    <button onClick={(e) => { e.stopPropagation(); setLoanToLeave(loan); }} className="text-red-500 hover:text-red-700 p-2 rounded-full hover:bg-red-100">
+                                        <Icon path="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.134-2.09-2.134H8.09a2.09 2.09 0 00-2.09 2.134v.916m7.5 0a48.667 48.667 0 00-7.5 0" className="w-5 h-5" />
+                                    </button>
                                 </li>
                             ))}
                         </ul>

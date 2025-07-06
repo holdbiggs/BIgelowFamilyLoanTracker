@@ -4,7 +4,7 @@ import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWith
 import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, arrayRemove, Timestamp, orderBy } from 'firebase/firestore';
 
 // --- Firebase Initialization ---
-const firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG);
+const firebaseConfig = JSON.parse(process.env.REACT_APP_FIREBASE_CONFIG);
 const appId = 'loan-tracker-app-v1';
 
 const app = initializeApp(firebaseConfig);
@@ -408,7 +408,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   }, []);
 
   useEffect(() => {
-      if (loanData?.settings) {
+      if (loanData?.settings && !isEditingSettings) {
           setFormSettings({
               appTitle: loanData.settings.appTitle || '',
               initialLoanAmount: loanData.settings.initialLoanAmount || '',
@@ -416,7 +416,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
               initialLoanDate: loanData.settings.initialLoanDate?.toDate().toISOString().split('T')[0] || ''
           });
       }
-  }, [loanData]);
+  }, [loanData, isEditingSettings]);
 
   useEffect(() => {
     if (!loanData || !loanData.settings?.interestRate || loanData.settings.interestRate <= 0) return;
@@ -438,32 +438,34 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
             const nextMonth = new Date(dateToCheck.getFullYear(), dateToCheck.getMonth() + 1, 1);
             const endOfMonth = new Date(nextMonth.getTime() - 1);
             
-            const tempTransactions = [...transactions, ...batch._mutations.filter(m => m.type === 'set').map(m => m.data)];
-            let runningBalance = parseFloat(loanData.settings.initialLoanAmount);
-            
-            tempTransactions
-                .filter(t => t.date.toDate() < dateToCheck)
-                .sort((a,b) => a.date.toDate() - b.date.toDate())
-                .forEach(t => {
-                    const amount = parseFloat(t.amount);
-                    if (t.type === 'payment') runningBalance -= amount;
-                    else if (t.type === 'loanIncrease' || t.type === 'interest') runningBalance += amount;
-                });
-            
-            if (runningBalance > 0) {
-                const monthlyRate = (loanData.settings.interestRate / 100) / 12;
-                const interestAmount = runningBalance * monthlyRate;
+            if (today >= endOfMonth) {
+                const tempTransactions = [...transactions, ...batch._mutations.filter(m => m.type === 'set').map(m => m.data)];
+                let runningBalance = parseFloat(loanData.settings.initialLoanAmount);
                 
-                const newInterestTransactionRef = doc(transactionsRef);
-                batch.set(newInterestTransactionRef, {
-                    amount: interestAmount,
-                    date: Timestamp.fromDate(endOfMonth),
-                    description: `Monthly Interest - ${endOfMonth.toLocaleString('default', { month: 'long' })} ${endOfMonth.getFullYear()}`,
-                    type: 'interest',
-                    authorId: 'system',
-                    createdAt: Timestamp.now()
-                });
-                interestAdded = true;
+                tempTransactions
+                    .filter(t => t.date.toDate() < dateToCheck)
+                    .sort((a,b) => a.date.toDate() - b.date.toDate())
+                    .forEach(t => {
+                        const amount = parseFloat(t.amount);
+                        if (t.type === 'payment') runningBalance -= amount;
+                        else if (t.type === 'loanIncrease' || t.type === 'interest') runningBalance += amount;
+                    });
+                
+                if (runningBalance > 0) {
+                    const monthlyRate = (loanData.settings.interestRate / 100) / 12;
+                    const interestAmount = runningBalance * monthlyRate;
+                    
+                    const newInterestTransactionRef = doc(transactionsRef);
+                    batch.set(newInterestTransactionRef, {
+                        amount: interestAmount,
+                        date: Timestamp.fromDate(endOfMonth),
+                        description: `Monthly Interest - ${endOfMonth.toLocaleString('default', { month: 'long' })} ${endOfMonth.getFullYear()}`,
+                        type: 'interest',
+                        authorId: 'system',
+                        createdAt: Timestamp.now()
+                    });
+                    interestAdded = true;
+                }
             }
             dateToCheck = nextMonth;
         }
@@ -526,6 +528,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     if (!userId || !loanId) return;
     
     const newSettings = {
+        ...loanData.settings,
         appTitle: formSettings.appTitle,
         initialLoanAmount: parseFloat(formSettings.initialLoanAmount),
         interestRate: parseFloat(formSettings.interestRate),
@@ -717,7 +720,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
 
   const isLoanPaidOff = currentRunningBalance <= 0 && loanData?.settings?.initialLoanAmount > 0;
 
-  if (loading || !loanData) {
+  if (loading || !loanData || !formSettings) {
       return (
           <div className="flex items-center justify-center min-h-screen bg-gray-100">
               <Spinner color="gray-800" />
@@ -890,25 +893,36 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                  <form onSubmit={handleSaveSettings} className="space-y-4">
                     <div>
                         <label htmlFor="appTitle" className="block text-sm font-medium text-gray-700 mb-1">Loan Name</label>
-                        <input type="text" id="appTitle" value={formSettings.appTitle} onChange={(e) => setFormSettings({...formSettings, appTitle: e.target.value})} className="w-full p-2 border border-gray-300 rounded-md"/>
+                        <input type="text" id="appTitle" value={formSettings.appTitle} onChange={(e) => setFormSettings({...formSettings, appTitle: e.target.value})} className="w-full p-2 border border-gray-300 rounded-md" disabled={!isEditingSettings}/>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label htmlFor="initialLoanAmount" className="block text-sm font-medium text-gray-700 mb-1">Initial Amount ($)</label>
-                            <input type="number" id="initialLoanAmount" value={formSettings.initialLoanAmount} onChange={(e) => setFormSettings({...formSettings, initialLoanAmount: e.target.value})} className="w-full p-2 border border-gray-300 rounded-md"/>
+                            <input type="number" id="initialLoanAmount" value={formSettings.initialLoanAmount} onChange={(e) => setFormSettings({...formSettings, initialLoanAmount: e.target.value})} className="w-full p-2 border border-gray-300 rounded-md" disabled={!isEditingSettings}/>
                         </div>
                         <div>
                             <label htmlFor="interestRate" className="block text-sm font-medium text-gray-700 mb-1">Annual Interest Rate (%)</label>
-                            <input type="number" id="interestRate" step="0.01" value={formSettings.interestRate} onChange={(e) => setFormSettings({...formSettings, interestRate: e.target.value})} placeholder="e.g., 5.25" className="w-full p-2 border border-gray-300 rounded-md"/>
+                            <input type="number" id="interestRate" step="0.01" value={formSettings.interestRate} onChange={(e) => setFormSettings({...formSettings, interestRate: e.target.value})} placeholder="e.g., 5.25" className="w-full p-2 border border-gray-300 rounded-md" disabled={!isEditingSettings}/>
                         </div>
                     </div>
                      <div>
                         <label htmlFor="initialLoanDate" className="block text-sm font-medium text-gray-700 mb-1">Initial Loan Date</label>
-                        <input type="date" id="initialLoanDate" value={formSettings.initialLoanDate} onChange={(e) => setFormSettings({...formSettings, initialLoanDate: e.target.value})} className="w-full p-2 border border-gray-300 rounded-md"/>
+                        <input type="date" id="initialLoanDate" value={formSettings.initialLoanDate} onChange={(e) => setFormSettings({...formSettings, initialLoanDate: e.target.value})} className="w-full p-2 border border-gray-300 rounded-md" disabled={!isEditingSettings}/>
                     </div>
-                    <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md disabled:bg-indigo-300">
-                        Save Settings
-                    </button>
+                    {isEditingSettings ? (
+                        <div className="flex gap-4">
+                            <button type="submit" disabled={loading} className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md disabled:bg-indigo-300">
+                                Save Settings
+                            </button>
+                            <button type="button" onClick={() => setIsEditingSettings(false)} className="flex-1 bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600">
+                                Cancel
+                            </button>
+                        </div>
+                    ) : (
+                        <button type="button" onClick={() => setIsEditingSettings(true)} className="w-full bg-gray-200 text-gray-800 py-2 px-4 rounded-lg hover:bg-gray-300">
+                            Edit Settings
+                        </button>
+                    )}
                 </form>
             </AccordionSection>
 

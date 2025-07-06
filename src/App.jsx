@@ -188,7 +188,6 @@ function DashboardScreen({ user, onSelectLoan }) {
     const [isJoining, setIsJoining] = useState(false);
     const [loanToLeave, setLoanToLeave] = useState(null);
 
-    // Function to generate a user-friendly, 6-character ID
     const generateFriendlyId = () => {
         const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
         let result = '';
@@ -422,17 +421,18 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
-  // State for the "Add Transaction" form
   const [newTransactionDate, setNewTransactionDate] = useState('');
   const [newTransactionType, setNewTransactionType] = useState('payment');
   const [newTransactionAmount, setNewTransactionAmount] = useState('');
   const [newTransactionDescription, setNewTransactionDescription] = useState('');
   const [editingTransactionId, setEditingTransactionId] = useState(null);
   
-  // State for modals
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState(null);
   
+  // New state for sorting transaction history
+  const [sortDirection, setSortDirection] = useState('desc');
+
   const getTodayDate = () => {
     const today = new Date();
     return today.toISOString().split('T')[0];
@@ -457,7 +457,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     });
 
     const transactionsColRef = collection(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`);
-    const q = query(transactionsColRef, orderBy('date', 'asc'));
+    const q = query(transactionsColRef, orderBy('date', 'asc')); // Always fetch ascending
     const unsubscribeTransactions = onSnapshot(q, (snapshot) => {
       const fetchedTransactions = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -559,12 +559,13 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     }
   };
 
-  const { transactions: displayTransactions, currentRunningBalance } = useMemo(() => {
+  const { transactionsForDisplay, currentRunningBalance, lastPayment } = useMemo(() => {
     if (!loanData?.settings?.initialLoanAmount || !loanData?.settings?.initialLoanDate) {
-      return { transactions: [], currentRunningBalance: loanData?.settings?.initialLoanAmount || 0 };
+      return { transactionsForDisplay: [], currentRunningBalance: loanData?.settings?.initialLoanAmount || 0, lastPayment: null };
     }
 
     let runningBalance = parseFloat(loanData.settings.initialLoanAmount);
+    let lastPaymentInfo = null;
     const calculatedTransactions = [];
     
     const sortedTransactions = [...transactions].sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -583,17 +584,27 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         const amount = parseFloat(t.amount);
         if (t.type === 'payment') {
             runningBalance -= amount;
+            lastPaymentInfo = { date: t.date, amount };
         } else if (t.type === 'loanIncrease') {
             runningBalance += amount;
         }
         calculatedTransactions.push({ ...t, runningBalance });
     });
 
+    // Now sort for display based on the user's choice
+    const sortedForDisplay = [...calculatedTransactions].sort((a, b) => {
+        if (sortDirection === 'desc') {
+            return b.date.getTime() - a.date.getTime();
+        }
+        return a.date.getTime() - b.date.getTime();
+    });
+
     return { 
-        transactions: calculatedTransactions, 
+        transactionsForDisplay: sortedForDisplay, 
         currentRunningBalance: runningBalance, 
+        lastPayment: lastPaymentInfo
     };
-  }, [transactions, loanData]);
+  }, [transactions, loanData, sortDirection]);
     
   const percentagePaidOff = useMemo(() => {
     if (!loanData?.settings?.initialLoanAmount || parseFloat(loanData.settings.initialLoanAmount) <= 0) return 0;
@@ -660,9 +671,17 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                     </p>
                 )}
                 {parseFloat(loanData.settings.initialLoanAmount) > 0 && !isLoanPaidOff && (
-                    <div className="w-full bg-indigo-400 rounded-full h-2.5 mt-4">
-                        <div className="bg-green-400 h-2.5 rounded-full" style={{ width: `${percentagePaidOff}%` }}></div>
+                    <div className="mt-4 space-y-2">
+                        <div className="w-full bg-indigo-400 rounded-full h-2.5">
+                            <div className="bg-green-400 h-2.5 rounded-full" style={{ width: `${percentagePaidOff}%` }}></div>
+                        </div>
+                        <p className="text-sm opacity-90">{percentagePaidOff.toFixed(1)}% Paid Off</p>
                     </div>
+                )}
+                {lastPayment && (
+                    <p className="text-sm opacity-80 mt-3">
+                        Last Payment: ${lastPayment.amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} on {lastPayment.date.toLocaleDateString()}
+                    </p>
                 )}
             </div>
 
@@ -699,12 +718,17 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
             </AccordionSection>
 
             <div className="bg-white p-4 sm:p-6 rounded-xl shadow-lg border border-gray-200">
-                <h2 className="text-xl font-semibold text-gray-700 mb-4 flex items-center">
-                    <Icon path="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.125 1.125 0 010 2.25H5.625a1.125 1.125 0 010-2.25z" className="w-6 h-6 mr-3 text-indigo-500" />
-                    Transaction History
-                </h2>
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-semibold text-gray-700 flex items-center">
+                        <Icon path="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.125 1.125 0 010 2.25H5.625a1.125 1.125 0 010-2.25z" className="w-6 h-6 mr-3 text-indigo-500" />
+                        Transaction History
+                    </h2>
+                    <button onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')} className="flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-800">
+                        Sort by Date {sortDirection === 'desc' ? <Icon path="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" className="w-4 h-4 ml-1" /> : <Icon path="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" className="w-4 h-4 ml-1" />}
+                    </button>
+                </div>
                 <div className="overflow-x-auto">
-                    {displayTransactions.length <= 1 ? (
+                    {transactionsForDisplay.length <= 1 ? (
                         <p className="text-center text-gray-500 py-4">No transactions recorded yet.</p>
                     ) : (
                         <table className="min-w-full divide-y divide-gray-200">
@@ -718,7 +742,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                                 </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
-                                {displayTransactions.map((t) => (
+                                {transactionsForDisplay.map((t) => (
                                 <tr key={t.id} className={t.isInitial ? 'bg-blue-50 font-semibold' : 'hover:bg-gray-50'}>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.date.toLocaleDateString()}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.description}</td>

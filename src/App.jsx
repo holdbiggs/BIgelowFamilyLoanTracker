@@ -4,7 +4,8 @@ import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWith
 import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, arrayRemove, Timestamp, orderBy } from 'firebase/firestore';
 
 // --- Firebase Initialization ---
-const firebaseConfig = JSON.parse(process.env.REACT_APP_FIREBASE_CONFIG);
+// Vite uses `import.meta.env.VITE_` to access environment variables
+const firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG);
 const appId = 'loan-tracker-app-v1';
 
 const app = initializeApp(firebaseConfig);

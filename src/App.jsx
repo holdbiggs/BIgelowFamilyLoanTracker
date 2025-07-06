@@ -446,6 +446,88 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         }
     }, [loanData]);
 
+    const handleAccrueInterest = async () => {
+        if (isCalculatingInterest || !loanData || !loanData.settings?.initialLoanDate || !loanData.settings.interestRate) {
+            setNotification({ type: 'error', message: 'Loan settings are incomplete.' });
+            return;
+        }
+        
+        setIsCalculatingInterest(true);
+        setNotification({ type: 'success', message: 'Recalculating all interest...' });
+
+        const loanRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
+        const transactionsRef = collection(loanRef, 'transactions');
+        const batch = writeBatch(db);
+
+        // 1. Delete all existing interest transactions
+        const interestQuery = query(transactionsRef, where('type', '==', 'interest'));
+        const interestSnapshot = await getDocs(interestQuery);
+        interestSnapshot.forEach(doc => batch.delete(doc.ref));
+
+        const nonInterestTransactions = transactions
+            .filter(t => t.type !== 'interest')
+            .map(t => ({...t, date: t.date.toDate()}));
+
+        const allBaseTransactions = [
+            { date: loanData.settings.initialLoanDate.toDate(), amount: loanData.settings.initialLoanAmount, type: 'initial' },
+            ...nonInterestTransactions
+        ].sort((a, b) => a.date.getTime() - b.date.getTime());
+
+        const today = new Date();
+        let dateIterator = new Date(loanData.settings.initialLoanDate.toDate());
+        let interestAdded = false;
+        
+        while(new Date(dateIterator.getFullYear(), dateIterator.getMonth() + 1, 0) < today) {
+            const year = dateIterator.getFullYear();
+            const month = dateIterator.getMonth();
+            const startOfMonth = new Date(year, month, 1);
+            const endOfMonth = new Date(year, month + 1, 0);
+
+            let balance = allBaseTransactions
+                .filter(t => t.date < startOfMonth)
+                .reduce((acc, t) => {
+                    const amount = parseFloat(t.amount);
+                    return t.type === 'payment' ? acc - amount : acc + amount;
+                }, 0);
+
+            if (balance > 0) {
+                const monthlyRate = (loanData.settings.interestRate / 100) / 12;
+                const interestAmount = balance * monthlyRate;
+                
+                if(interestAmount > 0.005) {
+                    const newInterestTransactionRef = doc(transactionsRef);
+                    batch.set(newInterestTransactionRef, {
+                        amount: interestAmount,
+                        date: Timestamp.fromDate(endOfMonth),
+                        description: `Monthly Interest - ${endOfMonth.toLocaleString('default', { month: 'long' })} ${year}`,
+                        type: 'interest',
+                        authorId: 'system',
+                        createdAt: Timestamp.now()
+                    });
+                    interestAdded = true;
+                    // Add to our temporary list for the next iteration's balance calculation
+                    allBaseTransactions.push({ date: endOfMonth, amount: interestAmount, type: 'interest' });
+                    allBaseTransactions.sort((a,b) => a.date.getTime() - b.date.getTime());
+                }
+            }
+            dateIterator.setMonth(dateIterator.getMonth() + 1);
+        }
+
+        try {
+            await batch.commit();
+            if(interestAdded) {
+                setNotification({type: 'success', message: 'Interest recalculated successfully.'});
+            } else {
+                setNotification({type: 'success', message: 'No interest to accrue at this time.'});
+            }
+        } catch (err) {
+            console.error("Error recalculating interest:", err);
+            setNotification({type: 'error', message: 'Failed to recalculate interest.'});
+        }
+        
+        setIsCalculatingInterest(false);
+    };
+
     useEffect(() => {
         if (!userId || !loanId) return;
 
@@ -618,7 +700,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
 
     const handleEditTransaction = (transaction) => {
         setEditingTransactionId(transaction.id);
-        setNewTransactionDate(transaction.date.toDate().toISOString().split('T')[0]);
+        setNewTransactionDate(transaction.date.toISOString().split('T')[0]);
         setNewTransactionType(transaction.type);
         setNewTransactionAmount(transaction.amount.toString());
         setNewTransactionDescription(transaction.description || '');
@@ -739,7 +821,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                                         <select id="transactionType" value={newTransactionType} onChange={(e) => setNewTransactionType(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md">
                                             <option value="payment">Payment</option>
                                             <option value="loanIncrease">Loan Increase</option>
-                                            <option value="interest">Interest Charge</option>
                                         </select>
                                     </div>
                                 </div>
@@ -770,6 +851,11 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                                     Sort by Date {sortDirection === 'desc' ? <Icon path="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" className="w-4 h-4 ml-1" /> : <Icon path="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" className="w-4 h-4 ml-1" />}
                                 </button>
                             </div>
+                            <div className="mb-4">
+                                <button onClick={handleAccrueInterest} disabled={isCalculatingInterest} className="w-full bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 shadow-md disabled:bg-blue-300 flex items-center justify-center">
+                                    {isCalculatingInterest ? <Spinner /> : 'Accrue Interest'}
+                                </button>
+                            </div>
                             <div className="overflow-x-auto">
                                 {transactionsForDisplay.length <= 1 && transactions.filter(t => t.type !== 'initial').length === 0 ? (
                                     <p className="text-center text-gray-500 py-4">No transactions recorded yet.</p>
@@ -795,7 +881,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                                                 </td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-right">${t.runningBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                    {t.type !== 'initial' && (
+                                                    {t.type !== 'initial' && t.authorId !== 'system' && (
                                                         <>
                                                         <button onClick={() => handleEditTransaction(t)} className="text-indigo-600 hover:text-indigo-900 mr-3">Edit</button>
                                                         <button onClick={() => handleDeleteConfirm(t.id)} className="text-red-600 hover:text-red-900">Delete</button>
@@ -953,4 +1039,4 @@ function App() {
     );
 }
 
-export default App
+export default App;

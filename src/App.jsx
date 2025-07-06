@@ -446,8 +446,8 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         }
     }, [loanData]);
 
-    const runInterestCalculation = async () => {
-        if (isCalculatingInterest || !loanData || !loanData.settings?.initialLoanDate || loanData.settings.interestRate == null) {
+    const runInterestCalculation = async (currentLoanData, currentTransactions) => {
+        if (isCalculatingInterest || !currentLoanData || !currentLoanData.settings?.initialLoanDate || currentLoanData.settings.interestRate == null) {
             return;
         }
         
@@ -461,17 +461,17 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         const interestSnapshot = await getDocs(interestQuery);
         interestSnapshot.forEach(doc => batch.delete(doc.ref));
 
-        const nonInterestTransactions = transactions
+        const nonInterestTransactions = currentTransactions
             .filter(t => t.type !== 'interest')
             .map(t => ({...t, date: t.date.toDate()}));
 
         const dynamicTransactions = [
-            { date: loanData.settings.initialLoanDate.toDate(), amount: loanData.settings.initialLoanAmount, type: 'initial' },
+            { date: currentLoanData.settings.initialLoanDate.toDate(), amount: currentLoanData.settings.initialLoanAmount, type: 'initial' },
             ...nonInterestTransactions
         ].sort((a, b) => a.date.getTime() - b.date.getTime());
 
         const today = new Date();
-        let dateIterator = new Date(loanData.settings.initialLoanDate.toDate());
+        let dateIterator = new Date(currentLoanData.settings.initialLoanDate.toDate());
         let interestAdded = false;
         
         while(new Date(dateIterator.getFullYear(), dateIterator.getMonth() + 1, 0) < today) {
@@ -487,8 +487,8 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                     return t.type === 'payment' ? acc - amount : acc + amount;
                 }, 0);
 
-            if (balance > 0 && loanData.settings.interestRate > 0) {
-                const monthlyRate = (loanData.settings.interestRate / 100) / 12;
+            if (balance > 0 && currentLoanData.settings.interestRate > 0) {
+                const monthlyRate = (currentLoanData.settings.interestRate / 100) / 12;
                 const interestAmount = balance * monthlyRate;
                 
                 if(interestAmount > 0.005) {
@@ -582,6 +582,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
             await setDoc(settingsDocRef, { settings: newSettings }, { merge: true });
             setNotification({type: 'success', message: 'Settings saved!'});
             setIsEditingSettings(false);
+            await runInterestCalculation();
         } catch (err) {
             setNotification({type: 'error', message: "Failed to save settings."});
         } finally {
@@ -806,7 +807,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                             )}
                         </div>
 
-                        <AccordionSection title={editingTransaction ? "Edit Transaction" : "Add Transaction"} iconPath="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" defaultOpen={!!editingTransaction} forceOpen={!!editingTransaction}>
+                        <AccordionSection title={editingTransaction ? "Edit Transaction" : "Add Transaction"} iconPath="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" defaultOpen={!editingTransaction} forceOpen={!!editingTransaction}>
                             <form onSubmit={handleAddOrUpdateTransaction} className="space-y-4">
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>

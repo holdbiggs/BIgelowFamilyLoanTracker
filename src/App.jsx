@@ -79,7 +79,7 @@ function AuthScreen() {
     const [view, setView] = useState('login');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [notification, setNotification] = useState(null); // {type, message}
+    const [notification, setNotification] = useState(null);
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async (e) => {
@@ -392,6 +392,16 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   
   const [sortDirection, setSortDirection] = useState('desc');
 
+  const [formSettings, setFormSettings] = useState({
+      appTitle: '',
+      initialLoanAmount: '',
+      interestRate: '',
+      initialLoanDate: ''
+  });
+
+  const [projectionPayment, setProjectionPayment] = useState('');
+  const [amortizationSchedule, setAmortizationSchedule] = useState([]);
+
   const getTodayDate = () => {
     const today = new Date();
     return today.toISOString().split('T')[0];
@@ -401,7 +411,17 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     setNewTransactionDate(getTodayDate());
   }, []);
 
-  // Interest Calculation Effect
+  useEffect(() => {
+      if (loanData?.settings) {
+          setFormSettings({
+              appTitle: loanData.settings.appTitle || '',
+              initialLoanAmount: loanData.settings.initialLoanAmount || '',
+              interestRate: loanData.settings.interestRate || '',
+              initialLoanDate: loanData.settings.initialLoanDate?.toDate().toISOString().split('T')[0] || ''
+          });
+      }
+  }, [loanData]);
+
   useEffect(() => {
     if (!loanData || !loanData.settings?.interestRate || loanData.settings.interestRate <= 0) return;
 
@@ -507,13 +527,13 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     if (!userId || !loanId) return;
     
     const newSettings = {
-        appTitle: e.target.appTitle.value,
-        initialLoanAmount: parseFloat(e.target.initialLoanAmount.value),
-        interestRate: parseFloat(e.target.interestRate.value),
-        initialLoanDate: Timestamp.fromDate(new Date(e.target.initialLoanDate.value)),
+        appTitle: formSettings.appTitle,
+        initialLoanAmount: parseFloat(formSettings.initialLoanAmount),
+        interestRate: parseFloat(formSettings.interestRate),
+        initialLoanDate: Timestamp.fromDate(new Date(formSettings.initialLoanDate)),
     }
 
-    if (isNaN(newSettings.initialLoanAmount) || isNaN(newSettings.interestRate) || !e.target.initialLoanDate.value) {
+    if (isNaN(newSettings.initialLoanAmount) || isNaN(newSettings.interestRate) || !formSettings.initialLoanDate) {
       setNotification({type: 'error', message: "Please enter valid numbers and a date for all settings."});
       return;
     }
@@ -660,6 +680,41 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     setShowDeleteConfirm(true);
   };
 
+  const handleCalculateProjections = () => {
+    if (!projectionPayment || isNaN(parseFloat(projectionPayment)) || parseFloat(projectionPayment) <= 0) {
+        setNotification({type: 'error', message: 'Please enter a valid monthly payment amount.'});
+        return;
+    }
+
+    const monthlyPayment = parseFloat(projectionPayment);
+    const annualRate = loanData.settings.interestRate / 100;
+    const monthlyRate = annualRate / 12;
+    let balance = currentRunningBalance;
+    
+    if (monthlyPayment <= balance * monthlyRate) {
+        setNotification({type: 'error', message: 'Monthly payment must be greater than the interest to pay off the loan.'});
+        setAmortizationSchedule([]);
+        return;
+    }
+
+    const schedule = [];
+    let month = 1;
+    while (balance > 0 && month < 600) { // Safety break at 50 years
+        const interestForMonth = balance * monthlyRate;
+        const principalForMonth = monthlyPayment - interestForMonth;
+        balance -= principalForMonth;
+        schedule.push({
+            month,
+            payment: monthlyPayment,
+            principal: principalForMonth,
+            interest: interestForMonth,
+            endingBalance: balance > 0 ? balance : 0
+        });
+        month++;
+    }
+    setAmortizationSchedule(schedule);
+  };
+
   const isLoanPaidOff = currentRunningBalance <= 0 && loanData?.settings?.initialLoanAmount > 0;
 
   if (loading || !loanData) {
@@ -793,25 +848,63 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                 </div>
             </div>
 
+            <AccordionSection title="Loan Projections" iconPath="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-3.75-2.25M21 18v-6m-18 6h18">
+                <div className="space-y-4">
+                    <div>
+                        <label htmlFor="projectionPayment" className="block text-sm font-medium text-gray-700 mb-1">Enter a Monthly Payment Amount ($)</label>
+                        <div className="flex gap-2">
+                            <input type="number" id="projectionPayment" value={projectionPayment} onChange={(e) => setProjectionPayment(e.target.value)} placeholder="e.g., 500" className="w-full p-2 border border-gray-300 rounded-md"/>
+                            <button onClick={handleCalculateProjections} className="bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md">Calculate</button>
+                        </div>
+                    </div>
+                    {amortizationSchedule.length > 0 && (
+                        <div className="overflow-x-auto max-h-96">
+                             <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50 sticky top-0">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Month</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Payment</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Principal</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Interest</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Ending Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {amortizationSchedule.map(row => (
+                                        <tr key={row.month}>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.month}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">${row.payment.toFixed(2)}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-green-600 text-right">${row.principal.toFixed(2)}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-orange-600 text-right">${row.interest.toFixed(2)}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-right">${row.endingBalance.toFixed(2)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            </AccordionSection>
+
             <AccordionSection title="Loan Settings" iconPath="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.055l.732-.41c.464-.26.996-.059 1.256.397l.547.947c.26.456.058 1.002-.398 1.256l-.732.41c-.35.197-.557.576-.557.98l0 .001c0 .403.207.782.557.98l.732.41c.456.254.658.8-.398-1.256l-.547-.947c-.26.456-.792.657-1.256.397l-.732-.41c-.35-.197-.807-.22-1.205-.055a1.73 1.73 0 00-.78.93l-.149.894c-.09.542-.56.94-1.11.94h-1.093c-.55 0-1.02-.398-1.11-.94l-.149-.894a1.73 1.73 0 00-.78-.93c-.398-.164-.855-.142-1.205.055l-.732.41c-.464.26-.996.059-1.256-.397l-.547-.947c-.26-.456-.058-1.002.398-1.256l.732-.41c.35.197.557.576.557.98l0 .001c0 .403-.207.782.557.98l-.732-.41c-.456.254-.658.8-.398-1.256l.547-.947c.26.456.792.657-1.256.397l.732-.41c.35-.197.807-.22 1.205-.055.396-.166.71-.506.78-.93l.149-.894z M12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z">
                  <form onSubmit={handleSaveSettings} className="space-y-4">
                     <div>
                         <label htmlFor="appTitle" className="block text-sm font-medium text-gray-700 mb-1">Loan Name</label>
-                        <input type="text" id="appTitle" defaultValue={loanData.settings.appTitle} className="w-full p-2 border border-gray-300 rounded-md"/>
+                        <input type="text" id="appTitle" value={formSettings.appTitle} onChange={(e) => setFormSettings({...formSettings, appTitle: e.target.value})} className="w-full p-2 border border-gray-300 rounded-md"/>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label htmlFor="initialLoanAmount" className="block text-sm font-medium text-gray-700 mb-1">Initial Amount ($)</label>
-                            <input type="number" id="initialLoanAmount" defaultValue={loanData.settings.initialLoanAmount} className="w-full p-2 border border-gray-300 rounded-md"/>
+                            <input type="number" id="initialLoanAmount" value={formSettings.initialLoanAmount} onChange={(e) => setFormSettings({...formSettings, initialLoanAmount: e.target.value})} className="w-full p-2 border border-gray-300 rounded-md"/>
                         </div>
                         <div>
                             <label htmlFor="interestRate" className="block text-sm font-medium text-gray-700 mb-1">Annual Interest Rate (%)</label>
-                            <input type="number" id="interestRate" step="0.01" defaultValue={loanData.settings.interestRate} placeholder="e.g., 5 for 5%" className="w-full p-2 border border-gray-300 rounded-md"/>
+                            <input type="number" id="interestRate" step="0.01" value={formSettings.interestRate} onChange={(e) => setFormSettings({...formSettings, interestRate: e.target.value})} placeholder="e.g., 5.25" className="w-full p-2 border border-gray-300 rounded-md"/>
                         </div>
                     </div>
                      <div>
                         <label htmlFor="initialLoanDate" className="block text-sm font-medium text-gray-700 mb-1">Initial Loan Date</label>
-                        <input type="date" id="initialLoanDate" defaultValue={loanData.settings.initialLoanDate?.toDate().toISOString().split('T')[0] || ''} className="w-full p-2 border border-gray-300 rounded-md"/>
+                        <input type="date" id="initialLoanDate" value={formSettings.initialLoanDate} onChange={(e) => setFormSettings({...formSettings, initialLoanDate: e.target.value})} className="w-full p-2 border border-gray-300 rounded-md"/>
                     </div>
                     <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md disabled:bg-indigo-300">
                         Save Settings

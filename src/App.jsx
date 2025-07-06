@@ -392,12 +392,8 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   
   const [sortDirection, setSortDirection] = useState('desc');
 
-  const [formSettings, setFormSettings] = useState({
-      appTitle: '',
-      initialLoanAmount: '',
-      interestRate: '',
-      initialLoanDate: ''
-  });
+  const [formSettings, setFormSettings] = useState(null);
+  const [isEditingSettings, setIsEditingSettings] = useState(false);
 
   const [projectionPayment, setProjectionPayment] = useState('');
   const [amortizationSchedule, setAmortizationSchedule] = useState([]);
@@ -433,15 +429,18 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         today.setHours(0, 0, 0, 0);
 
         let dateToCheck = new Date(lastCalcDate);
-        dateToCheck.setDate(dateToCheck.getDate() + 1);
         dateToCheck.setHours(0,0,0,0);
-
+        
         const batch = writeBatch(db);
         let interestAdded = false;
 
-        while(dateToCheck <= today) {
+        while(dateToCheck < today) {
+            const nextMonth = new Date(dateToCheck.getFullYear(), dateToCheck.getMonth() + 1, 1);
+            const endOfMonth = new Date(nextMonth.getTime() - 1);
+            
             const tempTransactions = [...transactions, ...batch._mutations.filter(m => m.type === 'set').map(m => m.data)];
             let runningBalance = parseFloat(loanData.settings.initialLoanAmount);
+            
             tempTransactions
                 .filter(t => t.date.toDate() < dateToCheck)
                 .sort((a,b) => a.date.toDate() - b.date.toDate())
@@ -452,31 +451,31 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                 });
             
             if (runningBalance > 0) {
-                const dailyRate = (loanData.settings.interestRate / 100) / 365;
-                const interestAmount = runningBalance * dailyRate;
+                const monthlyRate = (loanData.settings.interestRate / 100) / 12;
+                const interestAmount = runningBalance * monthlyRate;
                 
                 const newInterestTransactionRef = doc(transactionsRef);
                 batch.set(newInterestTransactionRef, {
                     amount: interestAmount,
-                    date: Timestamp.fromDate(dateToCheck),
-                    description: "Daily Interest Accrued",
+                    date: Timestamp.fromDate(endOfMonth),
+                    description: `Monthly Interest - ${endOfMonth.toLocaleString('default', { month: 'long' })} ${endOfMonth.getFullYear()}`,
                     type: 'interest',
                     authorId: 'system',
                     createdAt: Timestamp.now()
                 });
                 interestAdded = true;
             }
-            dateToCheck.setDate(dateToCheck.getDate() + 1);
+            dateToCheck = nextMonth;
         }
 
         if (interestAdded) {
             batch.update(loanRef, { 'settings.lastInterestCalculationDate': Timestamp.now() });
             try {
                 await batch.commit();
-                setNotification({type: 'success', message: 'Daily interest has been calculated and added.'});
+                setNotification({type: 'success', message: 'Monthly interest has been calculated and added.'});
             } catch (err) {
                 console.error("Error adding interest:", err);
-                setNotification({type: 'error', message: 'Could not add daily interest.'});
+                setNotification({type: 'error', message: 'Could not add monthly interest.'});
             }
         }
     };
@@ -531,7 +530,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         initialLoanAmount: parseFloat(formSettings.initialLoanAmount),
         interestRate: parseFloat(formSettings.interestRate),
         initialLoanDate: Timestamp.fromDate(new Date(formSettings.initialLoanDate)),
-    }
+    };
 
     if (isNaN(newSettings.initialLoanAmount) || isNaN(newSettings.interestRate) || !formSettings.initialLoanDate) {
       setNotification({type: 'error', message: "Please enter valid numbers and a date for all settings."});
@@ -544,6 +543,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     try {
       await setDoc(settingsDocRef, { settings: newSettings }, { merge: true });
       setNotification({type: 'success', message: 'Settings saved!'});
+      setIsEditingSettings(false);
     } catch (err) {
       setNotification({type: 'error', message: "Failed to save settings."});
     } finally {

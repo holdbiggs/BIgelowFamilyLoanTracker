@@ -4,7 +4,7 @@ import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWith
 import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, arrayRemove, Timestamp, orderBy } from 'firebase/firestore';
 
 // --- Firebase Initialization ---
-const firebaseConfig = JSON.parse(process.env.REACT_APP_FIREBASE_CONFIG);
+const firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG);
 const appId = 'loan-tracker-app-v1';
 
 const app = initializeApp(firebaseConfig);
@@ -408,7 +408,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   }, []);
 
   useEffect(() => {
-      if (loanData?.settings && !isEditingSettings) {
+      if (loanData?.settings) {
           setFormSettings({
               appTitle: loanData.settings.appTitle || '',
               initialLoanAmount: loanData.settings.initialLoanAmount || '',
@@ -416,58 +416,65 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
               initialLoanDate: loanData.settings.initialLoanDate?.toDate().toISOString().split('T')[0] || ''
           });
       }
-  }, [loanData, isEditingSettings]);
+  }, [loanData]);
 
   useEffect(() => {
-    if (!loanData || !loanData.settings?.interestRate || loanData.settings.interestRate <= 0) return;
+    if (!loanData || !loanData.settings?.interestRate || loanData.settings.interestRate <= 0 || !loanData.settings.initialLoanDate) return;
 
     const calculateAndAddInterest = async () => {
         const loanRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
         const transactionsRef = collection(loanRef, 'transactions');
-        const lastCalcDate = loanData.settings.lastInterestCalculationDate?.toDate() || loanData.settings.createdAt.toDate();
+        const lastCalcDate = loanData.settings.lastInterestCalculationDate?.toDate() || loanData.settings.initialLoanDate.toDate();
+        
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        let dateToCheck = new Date(lastCalcDate);
-        dateToCheck.setHours(0,0,0,0);
+        let current = new Date(lastCalcDate.getFullYear(), lastCalcDate.getMonth(), 1);
         
         const batch = writeBatch(db);
         let interestAdded = false;
 
-        while(dateToCheck < today) {
-            const nextMonth = new Date(dateToCheck.getFullYear(), dateToCheck.getMonth() + 1, 1);
-            const endOfMonth = new Date(nextMonth.getTime() - 1);
-            
-            if (today >= endOfMonth) {
-                const tempTransactions = [...transactions, ...batch._mutations.filter(m => m.type === 'set').map(m => m.data)];
-                let runningBalance = parseFloat(loanData.settings.initialLoanAmount);
-                
-                tempTransactions
-                    .filter(t => t.date.toDate() < dateToCheck)
-                    .sort((a,b) => a.date.toDate() - b.date.toDate())
-                    .forEach(t => {
-                        const amount = parseFloat(t.amount);
-                        if (t.type === 'payment') runningBalance -= amount;
-                        else if (t.type === 'loanIncrease' || t.type === 'interest') runningBalance += amount;
-                    });
-                
-                if (runningBalance > 0) {
-                    const monthlyRate = (loanData.settings.interestRate / 100) / 12;
-                    const interestAmount = runningBalance * monthlyRate;
+        while (current < today) {
+            const year = current.getFullYear();
+            const month = current.getMonth();
+            const endOfMonth = new Date(year, month + 1, 0);
+
+            if (endOfMonth < today) {
+                const interestForThisMonthExists = transactions.some(t => 
+                    t.type === 'interest' && 
+                    t.date.toDate().getFullYear() === year &&
+                    t.date.toDate().getMonth() === month
+                );
+
+                if (!interestForThisMonthExists) {
+                    let balanceAtStartOfMonth = parseFloat(loanData.settings.initialLoanAmount);
+                    transactions
+                        .filter(t => t.date.toDate() < new Date(year, month, 1))
+                        .sort((a,b) => a.date.toDate() - b.date.toDate())
+                        .forEach(t => {
+                            const amount = parseFloat(t.amount);
+                            if (t.type === 'payment') balanceAtStartOfMonth -= amount;
+                            else if (t.type === 'loanIncrease' || t.type === 'interest') balanceAtStartOfMonth += amount;
+                        });
                     
-                    const newInterestTransactionRef = doc(transactionsRef);
-                    batch.set(newInterestTransactionRef, {
-                        amount: interestAmount,
-                        date: Timestamp.fromDate(endOfMonth),
-                        description: `Monthly Interest - ${endOfMonth.toLocaleString('default', { month: 'long' })} ${endOfMonth.getFullYear()}`,
-                        type: 'interest',
-                        authorId: 'system',
-                        createdAt: Timestamp.now()
-                    });
-                    interestAdded = true;
+                    if (balanceAtStartOfMonth > 0) {
+                        const monthlyRate = (loanData.settings.interestRate / 100) / 12;
+                        const interestAmount = balanceAtStartOfMonth * monthlyRate;
+                        
+                        const newInterestTransactionRef = doc(transactionsRef);
+                        batch.set(newInterestTransactionRef, {
+                            amount: interestAmount,
+                            date: Timestamp.fromDate(endOfMonth),
+                            description: `Monthly Interest - ${endOfMonth.toLocaleString('default', { month: 'long' })} ${year}`,
+                            type: 'interest',
+                            authorId: 'system',
+                            createdAt: Timestamp.now()
+                        });
+                        interestAdded = true;
+                    }
                 }
             }
-            dateToCheck = nextMonth;
+            current.setMonth(current.getMonth() + 1);
         }
 
         if (interestAdded) {

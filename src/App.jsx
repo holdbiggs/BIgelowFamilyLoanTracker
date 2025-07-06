@@ -413,7 +413,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     const [newTransactionType, setNewTransactionType] = useState('payment');
     const [newTransactionAmount, setNewTransactionAmount] = useState('');
     const [newTransactionDescription, setNewTransactionDescription] = useState('');
-    const [editingTransactionId, setEditingTransactionId] = useState(null);
+    const [editingTransaction, setEditingTransaction] = useState(null);
     
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [transactionToDelete, setTransactionToDelete] = useState(null);
@@ -446,20 +446,17 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         }
     }, [loanData]);
 
-    const handleAccrueInterest = async () => {
-        if (isCalculatingInterest || !loanData || !loanData.settings?.initialLoanDate || !loanData.settings.interestRate) {
-            setNotification({ type: 'error', message: 'Loan settings are incomplete.' });
+    const runInterestCalculation = async () => {
+        if (isCalculatingInterest || !loanData || !loanData.settings?.initialLoanDate || loanData.settings.interestRate == null) {
             return;
         }
         
         setIsCalculatingInterest(true);
-        setNotification({ type: 'success', message: 'Recalculating all interest...' });
-
+        
         const loanRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
         const transactionsRef = collection(loanRef, 'transactions');
         const batch = writeBatch(db);
 
-        // 1. Delete all existing interest transactions
         const interestQuery = query(transactionsRef, where('type', '==', 'interest'));
         const interestSnapshot = await getDocs(interestQuery);
         interestSnapshot.forEach(doc => batch.delete(doc.ref));
@@ -468,7 +465,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
             .filter(t => t.type !== 'interest')
             .map(t => ({...t, date: t.date.toDate()}));
 
-        const allBaseTransactions = [
+        const dynamicTransactions = [
             { date: loanData.settings.initialLoanDate.toDate(), amount: loanData.settings.initialLoanAmount, type: 'initial' },
             ...nonInterestTransactions
         ].sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -483,31 +480,31 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
             const startOfMonth = new Date(year, month, 1);
             const endOfMonth = new Date(year, month + 1, 0);
 
-            let balance = allBaseTransactions
+            let balance = dynamicTransactions
                 .filter(t => t.date < startOfMonth)
                 .reduce((acc, t) => {
                     const amount = parseFloat(t.amount);
                     return t.type === 'payment' ? acc - amount : acc + amount;
                 }, 0);
 
-            if (balance > 0) {
+            if (balance > 0 && loanData.settings.interestRate > 0) {
                 const monthlyRate = (loanData.settings.interestRate / 100) / 12;
                 const interestAmount = balance * monthlyRate;
                 
                 if(interestAmount > 0.005) {
                     const newInterestTransactionRef = doc(transactionsRef);
-                    batch.set(newInterestTransactionRef, {
+                    const newInterestTx = {
                         amount: interestAmount,
                         date: Timestamp.fromDate(endOfMonth),
                         description: `Monthly Interest - ${endOfMonth.toLocaleString('default', { month: 'long' })} ${year}`,
                         type: 'interest',
                         authorId: 'system',
                         createdAt: Timestamp.now()
-                    });
+                    };
+                    batch.set(newInterestTransactionRef, newInterestTx);
+                    dynamicTransactions.push({ ...newInterestTx, date: endOfMonth });
+                    dynamicTransactions.sort((a,b) => a.date.getTime() - b.date.getTime());
                     interestAdded = true;
-                    // Add to our temporary list for the next iteration's balance calculation
-                    allBaseTransactions.push({ date: endOfMonth, amount: interestAmount, type: 'interest' });
-                    allBaseTransactions.sort((a,b) => a.date.getTime() - b.date.getTime());
                 }
             }
             dateIterator.setMonth(dateIterator.getMonth() + 1);
@@ -517,8 +514,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
             await batch.commit();
             if(interestAdded) {
                 setNotification({type: 'success', message: 'Interest recalculated successfully.'});
-            } else {
-                setNotification({type: 'success', message: 'No interest to accrue at this time.'});
             }
         } catch (err) {
             console.error("Error recalculating interest:", err);
@@ -575,7 +570,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
             initialLoanDate: Timestamp.fromDate(new Date(formSettings.initialLoanDate + 'T00:00:00')),
         };
 
-        if (isNaN(newSettings.initialLoanAmount) || isNaN(newSettings.interestRate) || !formSettings.initialLoanDate) {
+        if (isNaN(newSettings.initialLoanAmount) || newSettings.interestRate == null || !formSettings.initialLoanDate) {
             setNotification({type: 'error', message: "Please enter valid numbers and a date for all settings."});
             return;
         }
@@ -615,10 +610,10 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
 
         const transactionsColRef = collection(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`);
         try {
-            if (editingTransactionId) {
-                await setDoc(doc(transactionsColRef, editingTransactionId), transactionData, { merge: true });
+            if (editingTransaction) {
+                await setDoc(doc(transactionsColRef, editingTransaction.id), transactionData, { merge: true });
                 setNotification({type: 'success', message: 'Transaction updated.'});
-                setEditingTransactionId(null);
+                setEditingTransaction(null);
             } else {
                 await addDoc(transactionsColRef, transactionData);
                 setNotification({type: 'success', message: 'Transaction added.'});
@@ -627,6 +622,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
             setNewTransactionDescription('');
             setNewTransactionDate(getTodayDate());
             setNewTransactionType('payment'); // Reset to default
+            await runInterestCalculation(); // Recalculate interest after any change
         } catch (err) {
             setNotification({type: 'error', message: "Failed to save transaction."});
         } finally {
@@ -642,6 +638,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         try {
             await deleteDoc(transactionDocRef);
             setNotification({type: 'success', message: 'Transaction deleted.'});
+            await runInterestCalculation(); // Recalculate interest after delete
         } catch (err) {
             setNotification({type: 'error', message: "Failed to delete transaction."});
         } finally {
@@ -699,7 +696,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     }, [transactions, loanData]);
 
     const handleEditTransaction = (transaction) => {
-        setEditingTransactionId(transaction.id);
+        setEditingTransaction(transaction);
         setNewTransactionDate(transaction.date.toISOString().split('T')[0]);
         setNewTransactionType(transaction.type);
         setNewTransactionAmount(transaction.amount.toString());
@@ -707,7 +704,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     };
 
     const handleCancelEdit = () => {
-        setEditingTransactionId(null);
+        setEditingTransaction(null);
         setNewTransactionDate(getTodayDate());
         setNewTransactionType('payment');
         setNewTransactionAmount('');
@@ -764,7 +761,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         )
     }
 
-    const isSetupComplete = loanData?.settings?.initialLoanAmount && loanData?.settings?.initialLoanDate && loanData?.settings?.interestRate;
+    const isSetupComplete = loanData?.settings?.initialLoanAmount && loanData?.settings?.initialLoanDate && loanData.settings.interestRate != null;
 
     return (
         <div className="min-h-screen bg-gray-100 font-inter text-gray-800 p-4 sm:p-6 lg:p-8">
@@ -809,7 +806,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                             )}
                         </div>
 
-                        <AccordionSection title="Add Transaction" iconPath="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" defaultOpen={true}>
+                        <AccordionSection title={editingTransaction ? "Edit Transaction" : "Add Transaction"} iconPath="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" defaultOpen={!!editingTransaction} forceOpen={!!editingTransaction}>
                             <form onSubmit={handleAddOrUpdateTransaction} className="space-y-4">
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>
@@ -834,9 +831,9 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                                 </div>
                                 <div className="flex gap-4">
                                     <button type="submit" disabled={loading} className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 shadow-md disabled:bg-indigo-300">
-                                        {editingTransactionId ? 'Update Transaction' : 'Add Transaction'}
+                                        {editingTransaction ? 'Update Transaction' : 'Add Transaction'}
                                     </button>
-                                    {editingTransactionId && <button type="button" onClick={handleCancelEdit} className="flex-1 bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600">Cancel</button>}
+                                    {editingTransaction && <button type="button" onClick={handleCancelEdit} className="flex-1 bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600">Cancel</button>}
                                 </div>
                             </form>
                         </AccordionSection>
@@ -849,11 +846,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                                 </h2>
                                 <button onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')} className="flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-800">
                                     Sort by Date {sortDirection === 'desc' ? <Icon path="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" className="w-4 h-4 ml-1" /> : <Icon path="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" className="w-4 h-4 ml-1" />}
-                                </button>
-                            </div>
-                            <div className="mb-4">
-                                <button onClick={handleAccrueInterest} disabled={isCalculatingInterest} className="w-full bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 shadow-md disabled:bg-blue-300 flex items-center justify-center">
-                                    {isCalculatingInterest ? <Spinner /> : 'Accrue Interest'}
                                 </button>
                             </div>
                             <div className="overflow-x-auto">
@@ -896,6 +888,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                             </div>
                         </div>
 
+                        {loanData.settings.interestRate > 0 && (
                         <AccordionSection title="Loan Projections" iconPath="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-3.75-2.25M21 18v-6m-18 6h18">
                             <div className="space-y-4">
                                 <div>
@@ -933,6 +926,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                                 )}
                             </div>
                         </AccordionSection>
+                        )}
                     </>
                 ) : null}
 

@@ -4,7 +4,6 @@ import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWith
 import { getFirestore, collection, doc, setDoc, onSnapshot, query, addDoc, deleteDoc, where, getDocs, writeBatch, arrayUnion, arrayRemove, Timestamp, orderBy } from 'firebase/firestore';
 
 // --- Firebase Initialization ---
-// Vite uses `import.meta.env.VITE_` to access environment variables
 const firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG);
 const appId = 'loan-tracker-app-v1';
 
@@ -21,12 +20,12 @@ const Icon = ({ path, className = "w-6 h-6" }) => (
     </svg>
 );
 
-const Spinner = () => (
-    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+const Spinner = ({ color = 'white' }) => (
+    <div className={`animate-spin rounded-full h-6 w-6 border-b-2 border-${color}`}></div>
 );
 
 const Modal = ({ children, onClose }) => (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4" onClick={onClose}>
         <div className="bg-white rounded-2xl shadow-2xl p-6 sm:p-8 max-w-sm w-full" onClick={e => e.stopPropagation()}>
             {children}
         </div>
@@ -49,20 +48,44 @@ const AccordionSection = ({ title, iconPath, children, defaultOpen = false }) =>
     );
 };
 
+const Notification = ({ message, type, onDismiss }) => {
+    useEffect(() => {
+        const timer = setTimeout(onDismiss, 5000);
+        return () => clearTimeout(timer);
+    }, [onDismiss]);
+
+    const baseClasses = "fixed bottom-5 right-5 p-4 rounded-lg shadow-xl flex items-center max-w-sm z-50";
+    const typeClasses = {
+        success: "bg-green-500 text-white",
+        error: "bg-red-500 text-white",
+    };
+
+    const iconPaths = {
+        success: "M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+        error: "M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
+    };
+
+    return (
+        <div className={`${baseClasses} ${typeClasses[type]}`}>
+            <Icon path={iconPaths[type]} className="w-6 h-6 mr-3" />
+            <span>{message}</span>
+        </div>
+    );
+};
+
+
 // --- Authentication Screen ---
 function AuthScreen() {
-    const [view, setView] = useState('login'); // 'login', 'signup', 'forgotPassword'
+    const [view, setView] = useState('login');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [error, setError] = useState('');
-    const [message, setMessage] = useState('');
+    const [notification, setNotification] = useState(null); // {type, message}
     const [loading, setLoading] = useState(false);
 
-    const handleAuthSubmit = async (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
-        setError('');
-        setMessage('');
+        setNotification(null);
         try {
             if (view === 'login') {
                 await signInWithEmailAndPassword(auth, email, password);
@@ -70,7 +93,7 @@ function AuthScreen() {
                 await createUserWithEmailAndPassword(auth, email, password);
             }
         } catch (err) {
-            setError(err.message);
+            setNotification({ type: 'error', message: err.message });
         } finally {
             setLoading(false);
         }
@@ -79,13 +102,12 @@ function AuthScreen() {
     const handlePasswordReset = async (e) => {
         e.preventDefault();
         setLoading(true);
-        setError('');
-        setMessage('');
+        setNotification(null);
         try {
             await sendPasswordResetEmail(auth, email);
-            setMessage('Password reset email sent! Please check your inbox.');
+            setNotification({ type: 'success', message: 'Password reset email sent! Please check your inbox.' });
         } catch (err) {
-            setError(err.message);
+            setNotification({ type: 'error', message: err.message });
         } finally {
             setLoading(false);
         }
@@ -97,14 +119,7 @@ function AuthScreen() {
                 <form onSubmit={handlePasswordReset} className="space-y-6">
                     <h2 className="text-2xl font-semibold text-center text-gray-700">Reset Password</h2>
                     <p className="text-center text-sm text-gray-600">Enter your email address and we will send you a link to reset your password.</p>
-                    <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="Email Address"
-                        required
-                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
-                    />
+                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email Address" required className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition" />
                     <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition shadow-md disabled:bg-indigo-300 flex items-center justify-center">
                         {loading ? <Spinner /> : 'Send Reset Email'}
                     </button>
@@ -113,24 +128,10 @@ function AuthScreen() {
         }
 
         return (
-            <form onSubmit={handleAuthSubmit} className="space-y-6">
+            <form onSubmit={handleSubmit} className="space-y-6">
                 <h2 className="text-2xl font-semibold text-center text-gray-700">{view === 'login' ? 'Log In' : 'Sign Up'}</h2>
-                <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="Email Address"
-                    required
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
-                />
-                <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Password"
-                    required
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
-                />
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email Address" required className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition" />
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" required className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition" />
                 <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition shadow-md disabled:bg-indigo-300 flex items-center justify-center">
                     {loading ? <Spinner /> : (view === 'login' ? 'Log In' : 'Create Account')}
                 </button>
@@ -140,6 +141,7 @@ function AuthScreen() {
 
     return (
         <div className="min-h-screen bg-gray-100 flex flex-col justify-center items-center p-4">
+            {notification && <Notification message={notification.message} type={notification.type} onDismiss={() => setNotification(null)} />}
             <div className="max-w-md w-full mx-auto">
                 <div className="text-center mb-8">
                     <h1 className="text-4xl font-bold text-gray-800">Welcome</h1>
@@ -147,22 +149,10 @@ function AuthScreen() {
                 </div>
                 <div className="bg-white p-8 rounded-2xl shadow-lg">
                     {renderForm()}
-                    {error && <p className="text-red-500 text-sm text-center mt-4">{error}</p>}
-                    {message && <p className="text-green-500 text-sm text-center mt-4">{message}</p>}
-                    
                     <div className="text-center text-sm text-gray-600 mt-6">
-                        {view === 'login' && (
-                            <button onClick={() => setView('forgotPassword')} className="font-semibold text-indigo-600 hover:underline">
-                                Forgot Password?
-                            </button>
-                        )}
-                        {view === 'forgotPassword' && (
-                            <button onClick={() => setView('login')} className="font-semibold text-indigo-600 hover:underline">
-                                Back to Log In
-                            </button>
-                        )}
+                        {view === 'login' && (<button onClick={() => setView('forgotPassword')} className="font-semibold text-indigo-600 hover:underline">Forgot Password?</button>)}
+                        {view === 'forgotPassword' && (<button onClick={() => setView('login')} className="font-semibold text-indigo-600 hover:underline">Back to Log In</button>)}
                     </div>
-
                     <div className="text-center text-sm text-gray-600 mt-2">
                         {view === 'login' ? "Don't have an account?" : "Already have an account?"}
                         <button onClick={() => setView(view === 'login' ? 'signup' : 'login')} className="font-semibold text-indigo-600 hover:underline ml-1">
@@ -183,7 +173,7 @@ function DashboardScreen({ user, onSelectLoan }) {
     const [loading, setLoading] = useState(true);
     const [newLoanName, setNewLoanName] = useState('');
     const [joinLoanId, setJoinLoanId] = useState('');
-    const [error, setError] = useState('');
+    const [notification, setNotification] = useState(null);
     const [isCreating, setIsCreating] = useState(false);
     const [isJoining, setIsJoining] = useState(false);
     const [loanToLeave, setLoanToLeave] = useState(null);
@@ -210,7 +200,7 @@ function DashboardScreen({ user, onSelectLoan }) {
             setLoading(false);
         }, (err) => {
             console.error("Error fetching user loans:", err);
-            setError("Could not fetch your loans.");
+            setNotification({type: 'error', message: "Could not fetch your loans."});
             setLoading(false);
         });
 
@@ -220,36 +210,30 @@ function DashboardScreen({ user, onSelectLoan }) {
     const handleCreateLoan = async (e) => {
         e.preventDefault();
         if (!newLoanName.trim()) {
-            setError("Please enter a name for the loan.");
+            setNotification({type: 'error', message: "Please enter a name for the loan."});
             return;
         }
         setIsCreating(true);
-        setError('');
+        setNotification(null);
 
         const newLoanRef = doc(collection(db, `artifacts/${appId}/public/data/loans`));
-        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
         const friendlyId = generateFriendlyId();
         
-        const batch = writeBatch(db);
-
-        batch.set(newLoanRef, {
-            members: [user.uid],
-            friendlyId: friendlyId,
-            settings: {
-                appTitle: newLoanName,
-                createdAt: Timestamp.now(),
-            }
-        });
-        
-        batch.set(userDocRef, { loans: arrayUnion(newLoanRef.id) }, { merge: true });
-
         try {
-            await batch.commit();
+            await setDoc(newLoanRef, {
+                members: [user.uid],
+                friendlyId: friendlyId,
+                settings: {
+                    appTitle: newLoanName,
+                    createdAt: Timestamp.now(),
+                    lastInterestCalculationDate: Timestamp.now()
+                }
+            });
             setNewLoanName('');
             onSelectLoan(newLoanRef.id);
         } catch (err) {
             console.error("Error creating loan:", err);
-            setError("Failed to create loan. Please try again.");
+            setNotification({type: 'error', message: "Failed to create loan. Please try again."});
         } finally {
             setIsCreating(false);
         }
@@ -258,11 +242,11 @@ function DashboardScreen({ user, onSelectLoan }) {
     const handleJoinLoan = async (e) => {
         e.preventDefault();
         if (!joinLoanId.trim()) {
-            setError("Please enter a Loan ID to join.");
+            setNotification({type: 'error', message: "Please enter a Loan Code to join."});
             return;
         }
         setIsJoining(true);
-        setError('');
+        setNotification(null);
 
         const friendlyIdToJoin = joinLoanId.trim().toUpperCase();
         
@@ -272,25 +256,19 @@ function DashboardScreen({ user, onSelectLoan }) {
             const querySnapshot = await getDocs(q);
 
             if (querySnapshot.empty) {
-                setError("Loan ID not found. Please check the code and try again.");
+                setNotification({type: 'error', message: "Loan ID not found. Please check the code and try again."});
                 setIsJoining(false);
                 return;
             }
 
             const loanDoc = querySnapshot.docs[0];
             const loanDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanDoc.id}`);
-            const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
-            
-            const batch = writeBatch(db);
-            batch.update(loanDocRef, { members: arrayUnion(user.uid) });
-            batch.set(userDocRef, { loans: arrayUnion(loanDoc.id) }, { merge: true });
-            
-            await batch.commit();
+            await setDoc(loanDocRef, { members: arrayUnion(user.uid) }, { merge: true });
             setJoinLoanId('');
-
+            setNotification({type: 'success', message: `Successfully joined "${loanDoc.data().settings.appTitle}"!`});
         } catch (err) {
             console.error("Error joining loan:", err);
-            setError("Failed to join loan. Please check the code and try again.");
+            setNotification({type: 'error', message: "Failed to join loan. Please check the code and try again."});
         } finally {
             setIsJoining(false);
         }
@@ -300,24 +278,20 @@ function DashboardScreen({ user, onSelectLoan }) {
         if (!loanToLeave || !user) return;
         
         const loanDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanToLeave.id}`);
-        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/info`);
-
-        const batch = writeBatch(db);
-        batch.update(loanDocRef, { members: arrayRemove(user.uid) });
-        batch.update(userDocRef, { loans: arrayRemove(loanToLeave.id) });
-
         try {
-            await batch.commit();
-            setLoanToLeave(null); // Close the modal
+            await setDoc(loanDocRef, { members: arrayRemove(user.uid) }, { merge: true });
+            setNotification({type: 'success', message: `You have left "${loanToLeave.settings.appTitle}".`});
+            setLoanToLeave(null); 
         } catch (err) {
             console.error("Error leaving loan:", err);
-            setError("Failed to leave the loan. Please try again.");
+            setNotification({type: 'error', message: "Failed to leave the loan. Please try again."});
             setLoanToLeave(null);
         }
     };
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-200 p-4">
+        <div className="min-h-screen bg-gray-100 p-4">
+            {notification && <Notification message={notification.message} type={notification.type} onDismiss={() => setNotification(null)} />}
             {loanToLeave && (
                 <Modal onClose={() => setLoanToLeave(null)}>
                     <h3 className="text-lg font-semibold text-gray-900 mb-4">Leave Loan?</h3>
@@ -341,8 +315,6 @@ function DashboardScreen({ user, onSelectLoan }) {
                         Log Out
                     </button>
                 </div>
-                
-                {error && <p className="text-red-500 bg-red-100 p-3 rounded-lg mb-4 text-center">{error}</p>}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
@@ -351,13 +323,7 @@ function DashboardScreen({ user, onSelectLoan }) {
                             Create a New Loan
                         </h2>
                         <form onSubmit={handleCreateLoan}>
-                            <input
-                                type="text"
-                                value={newLoanName}
-                                onChange={(e) => setNewLoanName(e.target.value)}
-                                placeholder="e.g., Family Car Loan"
-                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition"
-                            />
+                            <input type="text" value={newLoanName} onChange={(e) => setNewLoanName(e.target.value)} placeholder="e.g., Family Car Loan" className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 transition" />
                             <button type="submit" disabled={isCreating} className="w-full mt-4 bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition shadow-md disabled:bg-indigo-300 flex items-center justify-center">
                                 {isCreating ? <Spinner /> : 'Create & Go'}
                             </button>
@@ -370,13 +336,7 @@ function DashboardScreen({ user, onSelectLoan }) {
                             Join an Existing Loan
                         </h2>
                         <form onSubmit={handleJoinLoan}>
-                            <input
-                                type="text"
-                                value={joinLoanId}
-                                onChange={(e) => setJoinLoanId(e.target.value)}
-                                placeholder="Enter 6-Digit Code"
-                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 transition"
-                            />
+                            <input type="text" value={joinLoanId} onChange={(e) => setJoinLoanId(e.target.value)} placeholder="Enter 6-Digit Code" className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 transition" />
                             <button type="submit" disabled={isJoining} className="w-full mt-4 bg-teal-600 text-white py-3 rounded-lg hover:bg-teal-700 transition shadow-md disabled:bg-teal-300 flex items-center justify-center">
                                 {isJoining ? <Spinner /> : 'Join Loan'}
                             </button>
@@ -390,7 +350,7 @@ function DashboardScreen({ user, onSelectLoan }) {
                         My Loans
                     </h2>
                     {loading ? (
-                        <div className="flex justify-center p-4"><Spinner /></div>
+                        <div className="flex justify-center p-4"><Spinner color="gray-800" /></div>
                     ) : userLoans.length > 0 ? (
                         <ul className="space-y-3">
                             {userLoans.map(loan => (
@@ -419,7 +379,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   const [transactions, setTransactions] = useState([]);
   const [loanData, setLoanData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [notification, setNotification] = useState(null);
   
   const [newTransactionDate, setNewTransactionDate] = useState('');
   const [newTransactionType, setNewTransactionType] = useState('payment');
@@ -430,7 +390,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState(null);
   
-  // New state for sorting transaction history
   const [sortDirection, setSortDirection] = useState('desc');
 
   const getTodayDate = () => {
@@ -441,6 +400,71 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   useEffect(() => {
     setNewTransactionDate(getTodayDate());
   }, []);
+
+  // Interest Calculation Effect
+  useEffect(() => {
+    if (!loanData || !loanData.settings?.interestRate || loanData.settings.interestRate <= 0) return;
+
+    const calculateAndAddInterest = async () => {
+        const loanRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
+        const transactionsRef = collection(loanRef, 'transactions');
+        const lastCalcDate = loanData.settings.lastInterestCalculationDate?.toDate() || loanData.settings.createdAt.toDate();
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        let dateToCheck = new Date(lastCalcDate);
+        dateToCheck.setDate(dateToCheck.getDate() + 1);
+        dateToCheck.setHours(0,0,0,0);
+
+        const batch = writeBatch(db);
+        let interestAdded = false;
+
+        while(dateToCheck <= today) {
+            const tempTransactions = [...transactions, ...batch._mutations.filter(m => m.type === 'set').map(m => m.data)];
+            let runningBalance = parseFloat(loanData.settings.initialLoanAmount);
+            tempTransactions
+                .filter(t => t.date.toDate() < dateToCheck)
+                .sort((a,b) => a.date.toDate() - b.date.toDate())
+                .forEach(t => {
+                    const amount = parseFloat(t.amount);
+                    if (t.type === 'payment') runningBalance -= amount;
+                    else if (t.type === 'loanIncrease' || t.type === 'interest') runningBalance += amount;
+                });
+            
+            if (runningBalance > 0) {
+                const dailyRate = (loanData.settings.interestRate / 100) / 365;
+                const interestAmount = runningBalance * dailyRate;
+                
+                const newInterestTransactionRef = doc(transactionsRef);
+                batch.set(newInterestTransactionRef, {
+                    amount: interestAmount,
+                    date: Timestamp.fromDate(dateToCheck),
+                    description: "Daily Interest Accrued",
+                    type: 'interest',
+                    authorId: 'system',
+                    createdAt: Timestamp.now()
+                });
+                interestAdded = true;
+            }
+            dateToCheck.setDate(dateToCheck.getDate() + 1);
+        }
+
+        if (interestAdded) {
+            batch.update(loanRef, { 'settings.lastInterestCalculationDate': Timestamp.now() });
+            try {
+                await batch.commit();
+                setNotification({type: 'success', message: 'Daily interest has been calculated and added.'});
+            } catch (err) {
+                console.error("Error adding interest:", err);
+                setNotification({type: 'error', message: 'Could not add daily interest.'});
+            }
+        }
+    };
+    
+    calculateAndAddInterest();
+
+  }, [loanData, transactions, loanId]);
+
 
   useEffect(() => {
     if (!userId || !loanId) return;
@@ -453,11 +477,11 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
       }
     }, (err) => {
         console.error("Error fetching settings:", err);
-        setError("Could not fetch loan settings.");
+        setNotification({type: 'error', message: "Could not fetch loan settings."});
     });
 
     const transactionsColRef = collection(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`);
-    const q = query(transactionsColRef, orderBy('date', 'asc')); // Always fetch ascending
+    const q = query(transactionsColRef, orderBy('date', 'asc'));
     const unsubscribeTransactions = onSnapshot(q, (snapshot) => {
       const fetchedTransactions = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -468,7 +492,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
       setLoading(false);
     }, (err) => {
         console.error("Error fetching transactions:", err);
-        setError("Could not fetch loan transactions.");
+        setNotification({type: 'error', message: "Could not fetch loan transactions."});
         setLoading(false);
     });
 
@@ -489,18 +513,19 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         initialLoanDate: Timestamp.fromDate(new Date(e.target.initialLoanDate.value)),
     }
 
-    if (isNaN(newSettings.initialLoanAmount) || isNaN(newSettings.interestRate) || !newSettings.initialLoanDate) {
-      setError("Please enter valid numbers and a date for all settings.");
+    if (isNaN(newSettings.initialLoanAmount) || isNaN(newSettings.interestRate) || !e.target.initialLoanDate.value) {
+      setNotification({type: 'error', message: "Please enter valid numbers and a date for all settings."});
       return;
     }
 
     setLoading(true);
-    setError('');
+    setNotification(null);
     const settingsDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}`);
     try {
       await setDoc(settingsDocRef, { settings: newSettings }, { merge: true });
+      setNotification({type: 'success', message: 'Settings saved!'});
     } catch (err) {
-      setError("Failed to save settings.");
+      setNotification({type: 'error', message: "Failed to save settings."});
     } finally {
       setLoading(false);
     }
@@ -510,12 +535,12 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     e.preventDefault();
     if (!userId || !loanId) return;
     if (!newTransactionDate || isNaN(parseFloat(newTransactionAmount)) || parseFloat(newTransactionAmount) <= 0) {
-        setError("Please enter a valid date and amount.");
+        setNotification({type: 'error', message: "Please enter a valid date and amount."});
         return;
     }
 
     setLoading(true);
-    setError('');
+    setNotification(null);
     const transactionData = {
         date: Timestamp.fromDate(new Date(newTransactionDate)),
         type: newTransactionType,
@@ -529,15 +554,17 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
     try {
         if (editingTransactionId) {
             await setDoc(doc(transactionsColRef, editingTransactionId), transactionData, { merge: true });
+            setNotification({type: 'success', message: 'Transaction updated.'});
             setEditingTransactionId(null);
         } else {
             await addDoc(transactionsColRef, transactionData);
+            setNotification({type: 'success', message: 'Transaction added.'});
         }
         setNewTransactionAmount('');
         setNewTransactionDescription('');
         setNewTransactionDate(getTodayDate());
     } catch (err) {
-        setError("Failed to save transaction.");
+        setNotification({type: 'error', message: "Failed to save transaction."});
     } finally {
         setLoading(false);
     }
@@ -546,12 +573,13 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   const handleDeleteTransaction = async () => {
     if (!userId || !loanId || !transactionToDelete) return;
     setLoading(true);
-    setError('');
+    setNotification(null);
     const transactionDocRef = doc(db, `artifacts/${appId}/public/data/loans/${loanId}/transactions`, transactionToDelete);
     try {
         await deleteDoc(transactionDocRef);
+        setNotification({type: 'success', message: 'Transaction deleted.'});
     } catch (err) {
-        setError("Failed to delete transaction.");
+        setNotification({type: 'error', message: "Failed to delete transaction."});
     } finally {
         setLoading(false);
         setShowDeleteConfirm(false);
@@ -585,13 +613,12 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
         if (t.type === 'payment') {
             runningBalance -= amount;
             lastPaymentInfo = { date: t.date, amount };
-        } else if (t.type === 'loanIncrease') {
+        } else if (t.type === 'loanIncrease' || t.type === 'interest') {
             runningBalance += amount;
         }
         calculatedTransactions.push({ ...t, runningBalance });
     });
 
-    // Now sort for display based on the user's choice
     const sortedForDisplay = [...calculatedTransactions].sort((a, b) => {
         if (sortDirection === 'desc') {
             return b.date.getTime() - a.date.getTime();
@@ -638,7 +665,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   if (loading || !loanData) {
       return (
           <div className="flex items-center justify-center min-h-screen bg-gray-100">
-              <Spinner />
+              <Spinner color="gray-800" />
           </div>
       )
   }
@@ -646,6 +673,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
   return (
     <div className="min-h-screen bg-gray-100 font-inter text-gray-800 p-4 sm:p-6 lg:p-8">
         <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap'); body { font-family: 'Inter', sans-serif; }`}</style>
+        {notification && <Notification message={notification.message} type={notification.type} onDismiss={() => setNotification(null)} />}
         
         <div className="max-w-4xl mx-auto space-y-8">
             <div>
@@ -658,8 +686,6 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                     <p className="text-xs text-gray-500 mt-2 bg-gray-200 p-2 rounded-md inline-block">SHARE CODE: <span className="font-mono select-all">{loanData.friendlyId}</span></p>
                 </div>
             </div>
-
-            {error && <p className="text-red-500 bg-red-100 p-3 rounded-lg text-center">{error}</p>}
             
             <div className="bg-indigo-600 text-white p-6 rounded-2xl shadow-2xl text-center">
                 <h2 className="text-lg font-semibold mb-2 opacity-80">Current Loan Balance</h2>
@@ -746,7 +772,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                                 <tr key={t.id} className={t.isInitial ? 'bg-blue-50 font-semibold' : 'hover:bg-gray-50'}>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.date.toLocaleDateString()}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.description}</td>
-                                    <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-medium ${t.type === 'payment' ? 'text-green-600' : t.type === 'initial' ? 'text-gray-800' : 'text-red-600'}`}>
+                                    <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-medium ${t.type === 'payment' ? 'text-green-600' : t.type === 'interest' ? 'text-orange-600' : 'text-red-600'}`}>
                                         {t.type !== 'initial' && (t.type === 'payment' ? '-' : '+')}
                                         ${t.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </td>
@@ -780,7 +806,7 @@ function LoanDetailScreen({ userId, loanId, onBack }) {
                         </div>
                         <div>
                             <label htmlFor="interestRate" className="block text-sm font-medium text-gray-700 mb-1">Annual Interest Rate (%)</label>
-                            <input type="number" id="interestRate" defaultValue={loanData.settings.interestRate} placeholder="e.g., 5 for 5%" className="w-full p-2 border border-gray-300 rounded-md"/>
+                            <input type="number" id="interestRate" step="0.01" defaultValue={loanData.settings.interestRate} placeholder="e.g., 5 for 5%" className="w-full p-2 border border-gray-300 rounded-md"/>
                         </div>
                     </div>
                      <div>
@@ -836,7 +862,7 @@ function App() {
         return (
             <div className="flex items-center justify-center min-h-screen bg-gray-100">
                 <div className="text-center">
-                    <Spinner />
+                    <Spinner color="gray-800" />
                     <p className="mt-4 text-lg font-semibold text-gray-700">Connecting...</p>
                 </div>
             </div>
